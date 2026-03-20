@@ -762,7 +762,7 @@ int main(int argc, char* argv[]) {
     if (!init_gstreamer_pipeline(cfg)) return 1;
 
     // Camera
-    cconst std::string cam_cmd =
+    const std::string cam_cmd =
         "rpicam-vid -t 0 --width 640 --height 480 --framerate 30 "
         "--codec mjpeg -o - 2>/dev/null | "
         "ffmpeg -f mjpeg -i pipe:0 "
