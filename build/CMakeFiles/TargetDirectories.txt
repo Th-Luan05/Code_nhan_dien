@@ -1,0 +1,3 @@
+/home/pi4/Yolo_stream/build/CMakeFiles/yolo_stream.dir
+/home/pi4/Yolo_stream/build/CMakeFiles/edit_cache.dir
+/home/pi4/Yolo_stream/build/CMakeFiles/rebuild_cache.dir

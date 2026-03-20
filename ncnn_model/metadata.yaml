@@ -1,0 +1,25 @@
+description: Ultralytics YOLOv8s-seg model trained on /content/Train/Build_Yolo/data.yaml
+author: Ultralytics
+date: '2026-03-20T20:49:50.399703'
+version: 8.4.24
+license: AGPL-3.0 License (https://ultralytics.com/license)
+docs: https://docs.ultralytics.com
+stride: 32
+task: segment
+batch: 1
+imgsz:
+- 640
+- 640
+names:
+  0: Background
+  1: HinhLapPhuong_Do
+  2: HinhLapPhuong_Vang
+  3: HinhLapPhuong_Xanh
+  4: HinhTru_Do
+  5: HinhTru_Vang
+  6: HinhTru_Xanh
+args:
+  batch: 1
+  half: false
+channels: 3
+end2end: false
