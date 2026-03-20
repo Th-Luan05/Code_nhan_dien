@@ -762,19 +762,18 @@ int main(int argc, char* argv[]) {
     if (!init_gstreamer_pipeline(cfg)) return 1;
 
     // Camera
-    cv::VideoCapture cap;
-    std::string gst_cam =
-        "libcamerasrc ! "
-        "video/x-raw,width=640,height=480,framerate=30/1,format=RG10 ! "
-        "videoconvert ! "
-        "video/x-raw,format=BGR ! "
-        "appsink name=sink drop=true max-buffers=2 sync=false";
-    cap.open(gst_cam, cv::CAP_GSTREAMER);
-    if (!cap.isOpened()) {
-        std::cerr << "[ERROR] Khong mo duoc camera qua libcamerasrc\n";
+    cconst std::string cam_cmd =
+        "rpicam-vid -t 0 --width 640 --height 480 --framerate 30 "
+        "--codec mjpeg -o - 2>/dev/null | "
+        "ffmpeg -f mjpeg -i pipe:0 "
+        "-f rawvideo -pix_fmt bgr24 -vf scale=640:480 pipe:1 2>/dev/null";
+
+    FILE* cam_pipe = popen(cam_cmd.c_str(), "r");
+    if (!cam_pipe) {
+        std::cerr << "[ERROR] Khong mo duoc cam_pipe\n";
         return 1;
     }
-    std::cout << "[INFO] Camera opened via libcamerasrc OK\n";
+    std::cout << "[INFO] Camera pipe opened OK (640x480 BGR)\n";
 
     // Signaling server in thread rieng
     std::thread([&]() { run_signaling_server(cfg.port); }).detach();
@@ -788,10 +787,14 @@ int main(int argc, char* argv[]) {
     float fps_smooth = 0.f;
     int   frame_count = 0;
 
+    const int frame_bytes = 640 * 480 * 3;
+    frame = cv::Mat(480, 640, CV_8UC3);
+
     while (g_ctx.running) {
-        if (!cap.read(frame) || frame.empty()) {
-            std::cerr << "[CAM] empty frame!\n";
-            continue;
+        size_t n = fread(frame.data, 1, frame_bytes, cam_pipe);
+        if (n != (size_t)frame_bytes) {
+            std::cerr << "[CAM] pipe read error n=" << n << "\n";
+            break;
         }
 
         auto dets = yolo.detect(frame,
@@ -820,6 +823,6 @@ int main(int argc, char* argv[]) {
 
     gst_element_set_state(g_ctx.pipeline, GST_STATE_NULL);
     gst_object_unref(g_ctx.pipeline);
-    cap.release();
+    pclose(cam_pipe);
     return 0;
 }
