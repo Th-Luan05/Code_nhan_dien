@@ -1,12 +1,13 @@
 /*
  * main.cpp
- * YOLOv8 NCNN inference trên Raspberry Pi 4
- * Camera: libcamera | Inference: NCNN | Stream: GStreamer WebRTC
+ * YOLOv8 NCNN + libcamerasrc (BGR) + GStreamer WebRTC
  *
  * Build:  mkdir build && cd build && cmake .. && make -j4
- * Chạy:   ./yolo_stream --model ../ncnn_model --port 8080
- * Xem:    Mở trình duyệt → http://<IP_PI>:8080
+ * Chay:   ./yolo_stream --model ../ncnn_model --port 8080
+ * Xem:    http://<IP_PI>:8080
  */
+
+#include "camera.h"
 
 #include <iostream>
 #include <fstream>
@@ -34,142 +35,135 @@
 #include <gst/webrtc/webrtc.h>
 #include <gst/sdp/sdp.h>
 
-// HTTP signaling server
+// HTTP signaling
 #include "httplib.h"
 
 // ===============================================================
 // CAU HINH
 // ===============================================================
 struct Config {
-    std::string model_dir   = "ncnn_model";
-    int         cam_id      = 0;
-    int         cam_w       = 640;
-    int         cam_h       = 480;
-    int         cam_fps     = 30;
-    int         infer_w     = 640;
-    int         infer_h     = 640;
-    float       conf_thres  = 0.25f;
-    float       nms_thres   = 0.45f;
-    int         port        = 8080;
-    int         num_threads = 4;
+    std::string model_dir  = "ncnn_model";
+    int         cam_w      = 1280;
+    int         cam_h      = 720;
+    int         cam_fps    = 30;
+    int         roi_size   = 480;   // crop vuong o giua
+    int         infer_size = 320;   // imgsz NCNN
+    float       conf_thres = 0.5f;
+    float       nms_thres  = 0.45f;
+    int         skip       = 3;     // inference moi skip frame
+    int         port       = 8080;
+    int         threads    = 4;
 };
 
 // ===============================================================
-// STRUCT KET QUA DETECTION
+// DETECTION STRUCT
 // ===============================================================
 struct Detection {
-    cv::Rect    bbox;
+    cv::Rect    bbox;       // toa do trong ROI
     float       conf;
     int         cls_id;
     std::string label;
 };
 
 // ===============================================================
-// CLASS YOLO NCNN
+// YOLO NCNN
 // ===============================================================
 class YoloNcnn {
 public:
-    bool load(const std::string& model_dir, int num_threads = 4) {
-        std::string param = model_dir + "/model.ncnn.param";
-        std::string bin   = model_dir + "/model.ncnn.bin";
-
+    bool load(const std::string& dir, int threads = 4) {
         net_.opt.use_vulkan_compute = false;
-        net_.opt.num_threads        = num_threads;
-
-        if (net_.load_param(param.c_str()) != 0) {
-            std::cerr << "[ERROR] Khong load duoc: " << param << "\n";
-            return false;
-        }
-        if (net_.load_model(bin.c_str()) != 0) {
-            std::cerr << "[ERROR] Khong load duoc: " << bin << "\n";
-            return false;
-        }
-        std::cout << "[INFO] NCNN model loaded: " << model_dir << "\n";
+        net_.opt.num_threads        = threads;
+        if (net_.load_param((dir + "/model.ncnn.param").c_str()) != 0) return false;
+        if (net_.load_model((dir + "/model.ncnn.bin").c_str())   != 0) return false;
+        std::cout << "[YOLO] model loaded: " << dir << "\n";
         return true;
     }
 
+    // input: BGR cv::Mat (tu Camera class)
     std::vector<Detection> detect(const cv::Mat& bgr,
-                                   int infer_w, int infer_h,
+                                   int isz,
                                    float conf_thres, float nms_thres,
-                                   const std::vector<std::string>& class_names)
+                                   const std::vector<std::string>& names)
     {
-        int img_w = bgr.cols;
-        int img_h = bgr.rows;
+        int img_w = bgr.cols, img_h = bgr.rows;
+        float scale = std::min((float)isz/img_w, (float)isz/img_h);
+        int nw = (int)(img_w*scale), nh = (int)(img_h*scale);
+        int px = (isz-nw)/2,        py = (isz-nh)/2;
 
-        float scale = std::min((float)infer_w / img_w, (float)infer_h / img_h);
-        int   new_w = (int)(img_w * scale);
-        int   new_h = (int)(img_h * scale);
-        int   pad_x = (infer_w - new_w) / 2;
-        int   pad_y = (infer_h - new_h) / 2;
-
+        // BGR input (camera.cpp output la BGR)
         ncnn::Mat in = ncnn::Mat::from_pixels_resize(
-            bgr.data, ncnn::Mat::PIXEL_BGR2RGB,
-            img_w, img_h, new_w, new_h);
+            bgr.data, ncnn::Mat::PIXEL_BGR, img_w, img_h, nw, nh);
+        ncnn::copy_make_border(in, in, py, isz-nh-py, px, isz-nw-px,
+                               ncnn::BORDER_CONSTANT, 114.f);
 
-        ncnn::copy_make_border(in, in,
-            pad_y, infer_h - new_h - pad_y,
-            pad_x, infer_w - new_w - pad_x,
-            ncnn::BORDER_CONSTANT, 114.f);
-
-        const float mean_vals[3] = {0.f, 0.f, 0.f};
-        const float norm_vals[3] = {1/255.f, 1/255.f, 1/255.f};
+        const float mean_vals[3] = {0,0,0};
+        const float norm_vals[3] = {1/255.f,1/255.f,1/255.f};
         in.substract_mean_normalize(mean_vals, norm_vals);
 
         ncnn::Extractor ex = net_.create_extractor();
         ex.input("in0", in);
-
         ncnn::Mat out0, out1;
         ex.extract("out0", out0);
         ex.extract("out1", out1);
-        ncnn::Mat& out = out0;
 
         std::vector<Detection> dets;
-        std::vector<cv::Rect>  boxes;
-        std::vector<float>     scores;
-        std::vector<int>       class_ids;
+        if (out0.empty()) return dets;
 
-        int num_class = (int)class_names.size();
-        int num_pred  = out.w;
-
-        for (int i = 0; i < num_pred; i++) {
-            float max_score = -1.f;
-            int   max_cls   = 0;
-            for (int c = 0; c < num_class; c++) {
-                float s = out.channel(4 + c)[i];
-                if (s > max_score) { max_score = s; max_cls = c; }
-            }
-            if (max_score < conf_thres) continue;
-
-            float cx = out.channel(0)[i];
-            float cy = out.channel(1)[i];
-            float bw = out.channel(2)[i];
-            float bh = out.channel(3)[i];
-
-            float x1 = ((cx - bw/2.f) - pad_x) / scale;
-            float y1 = ((cy - bh/2.f) - pad_y) / scale;
-            float x2 = ((cx + bw/2.f) - pad_x) / scale;
-            float y2 = ((cy + bh/2.f) - pad_y) / scale;
-
-            x1 = std::max(0.f, std::min(x1, (float)img_w));
-            y1 = std::max(0.f, std::min(y1, (float)img_h));
-            x2 = std::max(0.f, std::min(x2, (float)img_w));
-            y2 = std::max(0.f, std::min(y2, (float)img_h));
-
-            boxes.push_back({(int)x1,(int)y1,(int)(x2-x1),(int)(y2-y1)});
-            scores.push_back(max_score);
-            class_ids.push_back(max_cls);
+        int num_class = (int)names.size();
+        if (out0.c < 4 + num_class) {
+            num_class = out0.c - 4;
+            if (num_class <= 0) return dets;
         }
 
-        std::vector<int> indices;
-        cv::dnn::NMSBoxes(boxes, scores, conf_thres, nms_thres, indices);
+        // Log shape lan dau
+        static bool logged = false;
+        if (!logged) {
+            std::cout << "[YOLO] out0 w=" << out0.w
+                      << " h=" << out0.h << " c=" << out0.c
+                      << " num_class=" << num_class << "\n";
+            logged = true;
+        }
 
-        for (int idx : indices) {
+        std::vector<cv::Rect>  boxes;
+        std::vector<float>     scores;
+        std::vector<int>       cls_ids;
+
+        for (int i = 0; i < out0.w; i++) {
+            float max_s = -1; int max_c = 0;
+            for (int c = 0; c < num_class; c++) {
+                float s = out0.channel(4+c)[i];
+                if (s > max_s) { max_s = s; max_c = c; }
+            }
+            if (max_s < conf_thres) continue;
+
+            float cx = out0.channel(0)[i];
+            float cy = out0.channel(1)[i];
+            float bw = out0.channel(2)[i];
+            float bh = out0.channel(3)[i];
+
+            float x1 = ((cx-bw/2.f)-px)/scale;
+            float y1 = ((cy-bh/2.f)-py)/scale;
+            float x2 = ((cx+bw/2.f)-px)/scale;
+            float y2 = ((cy+bh/2.f)-py)/scale;
+
+            x1 = std::max(0.f, std::min(x1,(float)img_w));
+            y1 = std::max(0.f, std::min(y1,(float)img_h));
+            x2 = std::max(0.f, std::min(x2,(float)img_w));
+            y2 = std::max(0.f, std::min(y2,(float)img_h));
+
+            boxes.push_back({(int)x1,(int)y1,(int)(x2-x1),(int)(y2-y1)});
+            scores.push_back(max_s);
+            cls_ids.push_back(max_c);
+        }
+
+        std::vector<int> idx;
+        cv::dnn::NMSBoxes(boxes, scores, conf_thres, nms_thres, idx);
+        for (int i : idx) {
             Detection d;
-            d.bbox   = boxes[idx];
-            d.conf   = scores[idx];
-            d.cls_id = class_ids[idx];
-            d.label  = (d.cls_id < (int)class_names.size())
-                       ? class_names[d.cls_id] : "unknown";
+            d.bbox   = boxes[i];
+            d.conf   = scores[i];
+            d.cls_id = cls_ids[i];
+            d.label  = (d.cls_id < (int)names.size()) ? names[d.cls_id] : "?";
             dets.push_back(d);
         }
         return dets;
@@ -180,53 +174,80 @@ private:
 };
 
 // ===============================================================
-// VE BBOX
+// DRAW OVERLAY (BGR — dung voi OpenCV)
 // ===============================================================
 static const std::vector<cv::Scalar> COLORS = {
-    {255,56,56},{255,157,151},{255,112,31},{255,178,29},
-    {207,210,49},{72,249,10},{146,204,23},{61,219,134},
-    {26,147,52},{0,212,187},{44,153,168},{0,194,255},
-    {52,69,147},{100,115,255},{0,24,236},{132,56,255},
-    {82,0,133},{203,56,255},{255,149,200},{255,55,199},
+    {0,255,0},{0,255,255},{255,100,0},{255,0,255},{0,100,255},
+    {255,56,56},{255,157,151},{72,249,10},{0,194,255},{132,56,255},
 };
 
-void draw_detections(cv::Mat& frame,
-                     const std::vector<Detection>& dets, float fps)
+void draw_overlay(cv::Mat& bgr_frame,
+                  const std::vector<Detection>& dets,
+                  int sx, int sy, int roi_size,
+                  float fps, int skip,
+                  const std::vector<std::string>& names)
 {
+    // Khung ROI — mau xanh duong BGR=(255,0,0)
+    cv::rectangle(bgr_frame,
+        {sx, sy}, {sx+roi_size, sy+roi_size},
+        {255, 0, 0}, 2);
+    cv::putText(bgr_frame, "Vung AI (480x480)",
+        {sx, sy-10}, cv::FONT_HERSHEY_SIMPLEX,
+        0.7, {255,0,0}, 2);
+
+    // Bounding boxes — toa do: ROI + offset (sx,sy)
     for (const auto& d : dets) {
         auto& col = COLORS[d.cls_id % (int)COLORS.size()];
-        cv::rectangle(frame,
-            {d.bbox.x, d.bbox.y},
-            {d.bbox.x+d.bbox.width, d.bbox.y+d.bbox.height}, col, 2);
+        int x1 = d.bbox.x + sx;
+        int y1 = d.bbox.y + sy;
+        int x2 = x1 + d.bbox.width;
+        int y2 = y1 + d.bbox.height;
+
+        cv::rectangle(bgr_frame, {x1,y1}, {x2,y2}, col, 3);
 
         std::ostringstream oss;
-        oss << d.label << " " << std::fixed << std::setprecision(2) << d.conf;
-        std::string text = oss.str();
-
-        int baseline = 0;
-        cv::Size ts = cv::getTextSize(text, cv::FONT_HERSHEY_SIMPLEX,
-                                       0.55, 1, &baseline);
-        cv::rectangle(frame,
-            {d.bbox.x, d.bbox.y - ts.height - 6},
-            {d.bbox.x + ts.width + 4, d.bbox.y}, col, -1);
-        cv::putText(frame, text, {d.bbox.x+2, d.bbox.y-3},
-            cv::FONT_HERSHEY_SIMPLEX, 0.55,
-            {255,255,255}, 1, cv::LINE_AA);
+        oss << d.label << " "
+            << std::fixed << std::setprecision(0)
+            << d.conf*100 << "%";
+        cv::putText(bgr_frame, oss.str(),
+            {x1, y1-8}, cv::FONT_HERSHEY_SIMPLEX,
+            0.85, col, 2, cv::LINE_AA);
     }
 
-    std::ostringstream fps_oss;
-    fps_oss << "FPS: " << std::fixed << std::setprecision(1) << fps;
-    cv::putText(frame, fps_oss.str(), {10,28},
-        cv::FONT_HERSHEY_SIMPLEX, 0.8, {0,255,0}, 2, cv::LINE_AA);
+    // Panel ben phai — phat hien gi
+    int px = bgr_frame.cols - 380, py2 = 50;
+    if (!dets.empty()) {
+        cv::putText(bgr_frame, "Phat hien:",
+            {px, py2}, cv::FONT_HERSHEY_SIMPLEX,
+            0.9, {0,255,255}, 2);
+        for (int i = 0; i < (int)dets.size(); i++) {
+            int ty = py2 + 40 + i*40;
+            cv::circle(bgr_frame, {px+10, ty-10}, 9, {0,255,255}, -1);
+            std::string lbl = dets[i].label + "  " +
+                std::to_string((int)(dets[i].conf*100)) + "%";
+            cv::putText(bgr_frame, lbl, {px+28, ty},
+                cv::FONT_HERSHEY_SIMPLEX, 0.85, {0,255,255}, 2);
+        }
+    } else {
+        cv::putText(bgr_frame, "Khong phat hien",
+            {px, py2}, cv::FONT_HERSHEY_SIMPLEX,
+            0.85, {100,100,100}, 2);
+    }
+
+    // FPS
+    char buf[64];
+    snprintf(buf, sizeof(buf), "FPS: %.1f  skip:%d", fps, skip);
+    cv::putText(bgr_frame, buf, {10,45},
+        cv::FONT_HERSHEY_SIMPLEX, 1.0, {0,255,255}, 2);
 }
 
 // ===============================================================
 // GSTREAMER WEBRTC
 // ===============================================================
 struct StreamCtx {
-    GstElement*           pipeline  = nullptr;
-    GstElement*           appsrc    = nullptr;
-    GstElement*           webrtcbin = nullptr;
+    GstElement*  pipeline  = nullptr;
+    GstElement*  appsrc    = nullptr;
+    GstElement*  webrtcbin = nullptr;
     std::atomic<bool>     running{false};
     std::mutex            sdp_mutex;
     std::string           local_sdp;
@@ -234,226 +255,122 @@ struct StreamCtx {
     std::atomic<uint64_t> frames_pushed{0};
     std::atomic<uint64_t> frames_dropped{0};
 };
-
 static StreamCtx g_ctx;
 
 static void on_offer_created(GstPromise* promise, gpointer) {
-    std::cout << "[WEBRTC] on_offer_created fired\n";
     const GstStructure* reply = gst_promise_get_reply(promise);
     GstWebRTCSessionDescription* offer = nullptr;
     gst_structure_get(reply, "offer",
                       GST_TYPE_WEBRTC_SESSION_DESCRIPTION, &offer, nullptr);
     gst_promise_unref(promise);
-
-    if (!offer) {
-        std::cerr << "[WEBRTC] ERROR: offer is null!\n";
-        return;
-    }
+    if (!offer) { std::cerr << "[WEBRTC] offer null!\n"; return; }
 
     GstPromise* p = gst_promise_new();
-    g_signal_emit_by_name(g_ctx.webrtcbin,
-                          "set-local-description", offer, p);
-    gst_promise_interrupt(p);
-    gst_promise_unref(p);
+    g_signal_emit_by_name(g_ctx.webrtcbin, "set-local-description", offer, p);
+    gst_promise_interrupt(p); gst_promise_unref(p);
 
-    gchar* sdp_str = gst_sdp_message_as_text(offer->sdp);
-    {
-        std::lock_guard<std::mutex> lk(g_ctx.sdp_mutex);
-        g_ctx.local_sdp = sdp_str ? sdp_str : "";
-    }
-    std::cout << "[WEBRTC] SDP offer created, length="
-              << (sdp_str ? strlen(sdp_str) : 0) << " bytes\n";
-    g_free(sdp_str);
+    gchar* s = gst_sdp_message_as_text(offer->sdp);
+    { std::lock_guard<std::mutex> lk(g_ctx.sdp_mutex); g_ctx.local_sdp = s ? s : ""; }
+    std::cout << "[WEBRTC] SDP offer ready (" << (s?strlen(s):0) << " bytes)\n";
+    g_free(s);
     gst_webrtc_session_description_free(offer);
 }
 
-static void on_ice_candidate(GstElement*, guint mline,
-                              gchar* candidate, gpointer)
-{
-    std::cout << "[ICE] candidate mline=" << mline
-              << " : " << candidate << "\n";
-    std::ostringstream oss;
-    oss << "{\"sdpMLineIndex\":" << mline
-        << ",\"candidate\":\"" << candidate << "\"}";
+static void on_ice_candidate(GstElement*, guint mline, gchar* cand, gpointer) {
+    std::ostringstream o;
+    o << "{\"sdpMLineIndex\":" << mline << ",\"candidate\":\"" << cand << "\"}";
     std::lock_guard<std::mutex> lk(g_ctx.sdp_mutex);
-    g_ctx.local_ice.push_back(oss.str());
+    g_ctx.local_ice.push_back(o.str());
 }
 
 static void on_negotiation_needed(GstElement*, gpointer) {
-    std::cout << "[WEBRTC] on_negotiation_needed fired -> creating offer\n";
-    GstPromise* promise = gst_promise_new_with_change_func(
-        on_offer_created, nullptr, nullptr);
-    g_signal_emit_by_name(g_ctx.webrtcbin, "create-offer", nullptr, promise);
+    std::cout << "[WEBRTC] negotiation needed\n";
+    GstPromise* p = gst_promise_new_with_change_func(on_offer_created, nullptr, nullptr);
+    g_signal_emit_by_name(g_ctx.webrtcbin, "create-offer", nullptr, p);
 }
 
-static void on_connection_state_changed(GstElement* webrtc,
-                                         GParamSpec*, gpointer) {
-    GstWebRTCPeerConnectionState state;
-    g_object_get(webrtc, "connection-state", &state, nullptr);
-    const char* s = "unknown";
-    switch(state) {
-        case GST_WEBRTC_PEER_CONNECTION_STATE_NEW:          s="new"; break;
-        case GST_WEBRTC_PEER_CONNECTION_STATE_CONNECTING:   s="connecting"; break;
-        case GST_WEBRTC_PEER_CONNECTION_STATE_CONNECTED:    s="CONNECTED"; break;
-        case GST_WEBRTC_PEER_CONNECTION_STATE_DISCONNECTED: s="disconnected"; break;
-        case GST_WEBRTC_PEER_CONNECTION_STATE_FAILED:       s="FAILED"; break;
-        case GST_WEBRTC_PEER_CONNECTION_STATE_CLOSED:       s="closed"; break;
-        default: break;
-    }
-    std::cout << "[WEBRTC] connection-state -> " << s << "\n";
+static void on_conn_state(GstElement* w, GParamSpec*, gpointer) {
+    GstWebRTCPeerConnectionState st;
+    g_object_get(w, "connection-state", &st, nullptr);
+    const char* s[] = {"new","connecting","CONNECTED","disconnected","FAILED","closed"};
+    if (st < 6) std::cout << "[WEBRTC] conn -> " << s[st] << "\n";
 }
 
-static void on_ice_connection_state_changed(GstElement* webrtc,
-                                             GParamSpec*, gpointer) {
-    GstWebRTCICEConnectionState state;
-    g_object_get(webrtc, "ice-connection-state", &state, nullptr);
-    const char* s = "unknown";
-    switch(state) {
-        case GST_WEBRTC_ICE_CONNECTION_STATE_NEW:          s="new"; break;
-        case GST_WEBRTC_ICE_CONNECTION_STATE_CHECKING:     s="checking"; break;
-        case GST_WEBRTC_ICE_CONNECTION_STATE_CONNECTED:    s="CONNECTED"; break;
-        case GST_WEBRTC_ICE_CONNECTION_STATE_COMPLETED:    s="completed"; break;
-        case GST_WEBRTC_ICE_CONNECTION_STATE_FAILED:       s="FAILED"; break;
-        case GST_WEBRTC_ICE_CONNECTION_STATE_DISCONNECTED: s="disconnected"; break;
-        case GST_WEBRTC_ICE_CONNECTION_STATE_CLOSED:       s="closed"; break;
-        default: break;
-    }
-    std::cout << "[ICE] connection-state -> " << s << "\n";
+static void on_ice_state(GstElement* w, GParamSpec*, gpointer) {
+    GstWebRTCICEConnectionState st;
+    g_object_get(w, "ice-connection-state", &st, nullptr);
+    const char* s[] = {"new","checking","CONNECTED","completed","FAILED","disconnected","closed"};
+    if (st < 7) std::cout << "[ICE] state -> " << s[st] << "\n";
 }
 
-bool init_gstreamer_pipeline(const Config& cfg) {
-    setenv("GST_DEBUG", "webrtcbin:4,vp8enc:3,appsrc:3,rtpvp8pay:3", 1);
+bool init_webrtc(const Config& cfg) {
     gst_init(nullptr, nullptr);
 
-    std::cout << "[GST] GStreamer version: "
-              << gst_version_string() << "\n";
-
-    std::ostringstream pipe_str;
-    pipe_str << "appsrc name=src is-live=true format=time block=false "
-             << "caps=video/x-raw,format=BGR"
-             << ",width="     << cfg.cam_w
-             << ",height="    << cfg.cam_h
-             << ",framerate=" << cfg.cam_fps << "/1 "
-             << "! videoconvert "
-             << "! video/x-raw,format=I420 "
-             << "! vp8enc deadline=1 error-resilient=partitions "
-             <<   "keyframe-max-dist=30 auto-alt-ref=true "
-             <<   "cpu-used=8 target-bitrate=800000 "
-             << "! rtpvp8pay pt=96 "
-             << "! webrtcbin name=webrtc bundle-policy=max-bundle "
-             <<   "stun-server=stun://stun.l.google.com:19302";
-
-    std::cout << "[GST] Pipeline string:\n  " << pipe_str.str() << "\n";
+    // Input la BGR (tu Camera class) → videoconvert → I420 → vp8enc → webrtcbin
+    std::ostringstream ps;
+    ps << "appsrc name=src is-live=true format=time block=false "
+       << "caps=video/x-raw,format=BGR"
+       << ",width="     << cfg.cam_w
+       << ",height="    << cfg.cam_h
+       << ",framerate=" << cfg.cam_fps << "/1 "
+       << "! videoconvert "
+       << "! video/x-raw,format=I420 "
+       << "! vp8enc deadline=1 error-resilient=partitions "
+       <<   "keyframe-max-dist=30 auto-alt-ref=true cpu-used=8 "
+       <<   "target-bitrate=1000000 "
+       << "! rtpvp8pay pt=96 "
+       << "! webrtcbin name=webrtc bundle-policy=max-bundle "
+       <<   "stun-server=stun://stun.l.google.com:19302";
 
     GError* err = nullptr;
-    g_ctx.pipeline = gst_parse_launch(pipe_str.str().c_str(), &err);
+    g_ctx.pipeline = gst_parse_launch(ps.str().c_str(), &err);
     if (err) {
-        std::cerr << "[GST ERROR] parse_launch: " << err->message << "\n";
-        g_error_free(err);
-        return false;
+        std::cerr << "[GST] " << err->message << "\n";
+        g_error_free(err); return false;
     }
 
     g_ctx.appsrc    = gst_bin_get_by_name(GST_BIN(g_ctx.pipeline), "src");
     g_ctx.webrtcbin = gst_bin_get_by_name(GST_BIN(g_ctx.pipeline), "webrtc");
-
-    if (!g_ctx.appsrc) {
-        std::cerr << "[GST ERROR] appsrc element not found!\n";
-        return false;
+    if (!g_ctx.appsrc || !g_ctx.webrtcbin) {
+        std::cerr << "[GST] element not found\n"; return false;
     }
-    if (!g_ctx.webrtcbin) {
-        std::cerr << "[GST ERROR] webrtcbin element not found!\n";
-        return false;
-    }
-    std::cout << "[GST] appsrc and webrtcbin found OK\n";
 
     g_signal_connect(g_ctx.webrtcbin, "on-negotiation-needed",
                      G_CALLBACK(on_negotiation_needed), nullptr);
     g_signal_connect(g_ctx.webrtcbin, "on-ice-candidate",
                      G_CALLBACK(on_ice_candidate), nullptr);
     g_signal_connect(g_ctx.webrtcbin, "notify::connection-state",
-                     G_CALLBACK(on_connection_state_changed), nullptr);
+                     G_CALLBACK(on_conn_state), nullptr);
     g_signal_connect(g_ctx.webrtcbin, "notify::ice-connection-state",
-                     G_CALLBACK(on_ice_connection_state_changed), nullptr);
+                     G_CALLBACK(on_ice_state), nullptr);
 
     // Bus watch
     GstBus* bus = gst_pipeline_get_bus(GST_PIPELINE(g_ctx.pipeline));
     gst_bus_add_watch(bus, [](GstBus*, GstMessage* msg, gpointer) -> gboolean {
-        switch (GST_MESSAGE_TYPE(msg)) {
-            case GST_MESSAGE_ERROR: {
-                GError* e; gchar* dbg;
-                gst_message_parse_error(msg, &e, &dbg);
-                std::cerr << "[GST ERROR] src=" << GST_MESSAGE_SRC_NAME(msg)
-                          << " : " << e->message << "\n";
-                std::cerr << "[GST DEBUG] " << (dbg ? dbg : "none") << "\n";
-                g_error_free(e); g_free(dbg);
-                break;
-            }
-            case GST_MESSAGE_WARNING: {
-                GError* e; gchar* dbg;
-                gst_message_parse_warning(msg, &e, &dbg);
-                std::cerr << "[GST WARN] src=" << GST_MESSAGE_SRC_NAME(msg)
-                          << " : " << e->message << "\n";
-                g_error_free(e); g_free(dbg);
-                break;
-            }
-            case GST_MESSAGE_STATE_CHANGED: {
-                GstState old_s, new_s;
-                gst_message_parse_state_changed(msg, &old_s, &new_s, nullptr);
-                std::cout << "[GST STATE] " << GST_MESSAGE_SRC_NAME(msg)
-                          << ": " << gst_element_state_get_name(old_s)
-                          << " -> " << gst_element_state_get_name(new_s) << "\n";
-                break;
-            }
-            case GST_MESSAGE_EOS:
-                std::cerr << "[GST] EOS received\n";
-                break;
-            default: break;
+        if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_ERROR) {
+            GError* e; gchar* d;
+            gst_message_parse_error(msg, &e, &d);
+            std::cerr << "[GST ERROR] " << e->message << " | " << (d?d:"") << "\n";
+            g_error_free(e); g_free(d);
         }
         return TRUE;
     }, nullptr);
     gst_object_unref(bus);
 
-    // GLib main loop (thread rieng - can cho bus watch + webrtcbin)
+    // GLib loop
     GMainLoop* loop = g_main_loop_new(nullptr, FALSE);
-    std::thread([loop]() {
-        std::cout << "[GST] GLib main loop started\n";
-        g_main_loop_run(loop);
-    }).detach();
+    std::thread([loop]{ g_main_loop_run(loop); }).detach();
 
-    GstStateChangeReturn sc =
-        gst_element_set_state(g_ctx.pipeline, GST_STATE_PLAYING);
-    std::cout << "[GST] set_state(PLAYING) return=" << sc
-              << " (0=failure,1=success,2=async,3=no_preroll)\n";
-
-    if (sc == GST_STATE_CHANGE_FAILURE) {
-        std::cerr << "[GST ERROR] Pipeline failed to go to PLAYING!\n";
-        return false;
-    }
-
+    gst_element_set_state(g_ctx.pipeline, GST_STATE_PLAYING);
     g_ctx.running = true;
-    std::cout << "[INFO] GStreamer pipeline started OK\n";
+    std::cout << "[GST] pipeline PLAYING\n";
     return true;
 }
 
-// Push 1 frame BGR vao appsrc
 void push_frame(const cv::Mat& bgr, int fps) {
-    if (!g_ctx.appsrc || !g_ctx.running) {
-        std::cerr << "[PUSH] WARN: appsrc null or not running\n";
-        return;
-    }
+    if (!g_ctx.appsrc || !g_ctx.running) return;
 
     gsize size = bgr.total() * bgr.elemSize();
-    static uint64_t push_count = 0;
-
-    if (push_count % 30 == 0) {
-        std::cout << "[PUSH] frame #" << push_count
-                  << " size=" << size
-                  << " " << bgr.cols << "x" << bgr.rows
-                  << " pushed_ok=" << g_ctx.frames_pushed.load()
-                  << " dropped=" << g_ctx.frames_dropped.load() << "\n";
-    }
-    push_count++;
-
     GstBuffer* buf = gst_buffer_new_allocate(nullptr, size, nullptr);
     GstMapInfo map;
     gst_buffer_map(buf, &map, GST_MAP_WRITE);
@@ -469,254 +386,164 @@ void push_frame(const cv::Mat& bgr, int fps) {
     g_signal_emit_by_name(g_ctx.appsrc, "push-buffer", buf, &ret);
     gst_buffer_unref(buf);
 
-    if (ret == GST_FLOW_OK) {
-        g_ctx.frames_pushed++;
-    } else {
+    if (ret == GST_FLOW_OK) g_ctx.frames_pushed++;
+    else {
         g_ctx.frames_dropped++;
-        std::cerr << "[PUSH] FAILED ret=" << ret
-                  << " (" << gst_flow_get_name(ret) << ")\n";
+        std::cerr << "[PUSH] failed: " << gst_flow_get_name(ret) << "\n";
     }
 }
 
 // ===============================================================
-// HTTP SIGNALING SERVER
+// HTTP SIGNALING
 // ===============================================================
 static const char* INDEX_HTML = R"html(
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>YOLOv8 Live Stream - Pi 4</title>
+<!DOCTYPE html><html>
+<head><meta charset="utf-8"><title>YOLOv8 Pi4</title>
 <style>
-  body { background:#111; color:#eee; font-family:sans-serif;
-         display:flex; flex-direction:column; align-items:center;
-         margin:0; padding:20px; }
-  h2   { margin-bottom:12px; }
-  video{ width:100%; max-width:800px; border:2px solid #444;
-         border-radius:8px; background:#000; }
-  #status { margin-top:10px; font-size:13px; color:#aaa; }
-  #log    { margin-top:8px; font-size:11px; color:#666; font-family:monospace;
-            max-height:150px; overflow-y:auto; width:100%; max-width:800px; }
-</style>
-</head>
+body{background:#111;color:#eee;font-family:sans-serif;
+     display:flex;flex-direction:column;align-items:center;margin:0;padding:20px}
+video{width:100%;max-width:900px;border:2px solid #444;border-radius:8px;background:#000}
+#status{margin:8px 0;font-size:13px;color:#aaa}
+#log{font-size:11px;color:#555;font-family:monospace;max-height:120px;
+     overflow-y:auto;width:100%;max-width:900px}
+</style></head>
 <body>
-<h2>YOLOv8 Live - Raspberry Pi 4</h2>
-<video id="video" autoplay playsinline muted></video>
+<h2>YOLOv8 Live — Raspberry Pi 4</h2>
+<video id="v" autoplay playsinline muted></video>
 <div id="status">Connecting...</div>
 <div id="log"></div>
 <script>
-function log(msg) {
-  const el = document.getElementById('log');
-  const t  = new Date().toISOString().slice(11,19);
-  el.innerHTML += t + ' ' + msg + '<br>';
-  el.scrollTop  = el.scrollHeight;
-  console.log('[WebRTC]', msg);
+function log(m){
+  const e=document.getElementById('log');
+  e.innerHTML+=new Date().toISOString().slice(11,19)+' '+m+'<br>';
+  e.scrollTop=e.scrollHeight;
 }
-
-const pc = new RTCPeerConnection({
-  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-});
-
-pc.onconnectionstatechange = () => {
-  const s = pc.connectionState;
-  log('connection-state: ' + s);
-  document.getElementById('status').textContent = s;
+const pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
+pc.onconnectionstatechange=()=>{
+  log('conn: '+pc.connectionState);
+  document.getElementById('status').textContent=pc.connectionState;
 };
-pc.oniceconnectionstatechange = () =>
-  log('ice-connection-state: ' + pc.iceConnectionState);
-pc.onsignalingstatechange = () =>
-  log('signaling-state: ' + pc.signalingState);
-
-pc.ontrack = e => {
-  log('ontrack! streams=' + e.streams.length
-      + ' kind=' + e.track.kind);
-  const video = document.getElementById('video');
-  video.srcObject = e.streams[0];
-  video.play().catch(err => log('play() error: ' + err));
+pc.oniceconnectionstatechange=()=>log('ice: '+pc.iceConnectionState);
+pc.ontrack=e=>{
+  log('track! kind='+e.track.kind);
+  document.getElementById('v').srcObject=e.streams[0];
 };
-
-pc.onicecandidate = e => {
-  if (e.candidate) {
-    log('sending ICE: ' + e.candidate.candidate.slice(0, 60) + '...');
-    fetch('/ice', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(e.candidate)
-    });
-  } else {
-    log('ICE gathering complete');
+pc.onicecandidate=e=>{
+  if(e.candidate){
+    log('send ICE');
+    fetch('/ice',{method:'POST',headers:{'Content-Type':'application/json'},
+                  body:JSON.stringify(e.candidate)});
   }
 };
-
-async function start() {
-  try {
-    log('GET /offer ...');
-    const r = await fetch('/offer');
-    if (!r.ok) { log('ERROR /offer: status=' + r.status); return; }
-
-    const data = await r.json();
-    log('Got SDP offer, length=' + data.sdp.length);
-
-    await pc.setRemoteDescription({ type: 'offer', sdp: data.sdp });
-    log('setRemoteDescription OK');
-
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    log('createAnswer + setLocalDescription OK');
-
-    const ar = await fetch('/answer', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ sdp: answer.sdp })
-    });
-    log('POST /answer -> ' + ar.status);
-
-    // Poll ICE candidates tu Pi
-    setInterval(async () => {
-      try {
-        const ri = await fetch('/ice_candidates');
-        const candidates = await ri.json();
-        for (const c of candidates) {
-          log('addIceCandidate: ' + JSON.stringify(c).slice(0, 60));
-          await pc.addIceCandidate(c)
-            .catch(e => log('addIceCandidate ERROR: ' + e));
-        }
-      } catch(e) { log('poll ICE error: ' + e); }
-    }, 300);
-
-  } catch(e) {
-    log('EXCEPTION: ' + e);
-  }
+async function start(){
+  try{
+    log('GET /offer...');
+    const r=await fetch('/offer');
+    if(!r.ok){log('offer err '+r.status);return;}
+    const d=await r.json();
+    log('got SDP len='+d.sdp.length);
+    await pc.setRemoteDescription({type:'offer',sdp:d.sdp});
+    const ans=await pc.createAnswer();
+    await pc.setLocalDescription(ans);
+    log('send answer');
+    await fetch('/answer',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({sdp:ans.sdp})});
+    setInterval(async()=>{
+      const ri=await fetch('/ice_candidates');
+      const cs=await ri.json();
+      for(const c of cs) await pc.addIceCandidate(c).catch(e=>log('ice err:'+e));
+    },300);
+  }catch(e){log('EX: '+e);}
 }
 start();
-</script>
-</body>
-</html>
+</script></body></html>
 )html";
 
-void run_signaling_server(int port) {
+void run_http(int port) {
     httplib::Server svr;
 
-    svr.Get("/", [](const httplib::Request&, httplib::Response& res) {
-        res.set_content(INDEX_HTML, "text/html");
+    svr.Get("/", [](const httplib::Request&, httplib::Response& r){
+        r.set_content(INDEX_HTML,"text/html");
     });
 
-    svr.Get("/offer", [](const httplib::Request&, httplib::Response& res) {
-        std::cout << "[HTTP] GET /offer (waiting for SDP...)\n";
-        for (int i = 0; i < 100; i++) {
+    svr.Get("/offer", [](const httplib::Request&, httplib::Response& r){
+        for (int i=0; i<100; i++) {
             {
                 std::lock_guard<std::mutex> lk(g_ctx.sdp_mutex);
                 if (!g_ctx.local_sdp.empty()) {
                     std::string esc;
                     for (char c : g_ctx.local_sdp) {
-                        if      (c == '\n') esc += "\\n";
-                        else if (c == '\r') esc += "\\r";
-                        else if (c == '"')  esc += "\\\"";
-                        else if (c == '\\') esc += "\\\\";
-                        else                esc += c;
+                        if      (c=='\n') esc+="\\n";
+                        else if (c=='\r') esc+="\\r";
+                        else if (c=='"')  esc+="\\\"";
+                        else if (c=='\\') esc+="\\\\";
+                        else              esc+=c;
                     }
-                    std::cout << "[HTTP] /offer: sending SDP ("
-                              << esc.size() << " bytes)\n";
-                    res.set_content("{\"sdp\":\"" + esc + "\"}",
-                                    "application/json");
+                    r.set_content("{\"sdp\":\""+esc+"\"}","application/json");
                     return;
                 }
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
-        std::cerr << "[HTTP] /offer: timeout! SDP never created\n";
-        res.status = 503;
+        r.status=503;
     });
 
-    svr.Post("/answer", [](const httplib::Request& req, httplib::Response& res) {
-        std::cout << "[HTTP] POST /answer len=" << req.body.size() << "\n";
-        auto& body = req.body;
+    svr.Post("/answer", [](const httplib::Request& req, httplib::Response& r){
+        auto& b=req.body;
+        auto p1=b.find("\"sdp\""); if(p1==std::string::npos){r.status=400;return;}
+        auto p2=b.find("\"",p1+6);
+        auto p3=b.rfind("\"");
+        if(p2==std::string::npos||p3<=p2){r.status=400;return;}
+        std::string sdp=b.substr(p2+1,p3-p2-1);
 
-        auto pos1 = body.find("\"sdp\"");
-        if (pos1 == std::string::npos) {
-            std::cerr << "[HTTP] /answer: no sdp key\n";
-            res.status = 400; return;
-        }
-        auto pos2 = body.find("\"", pos1 + 6);
-        auto pos3 = body.rfind("\"");
-        if (pos2 == std::string::npos || pos3 <= pos2) {
-            std::cerr << "[HTTP] /answer: bad JSON\n";
-            res.status = 400; return;
-        }
-        std::string sdp = body.substr(pos2 + 1, pos3 - pos2 - 1);
-
-        // Unescape \n
-        std::string sdp_un;
-        for (size_t i = 0; i < sdp.size(); i++) {
-            if (sdp[i]=='\\' && i+1<sdp.size() && sdp[i+1]=='n') {
-                sdp_un += '\n'; i++;
-            } else if (sdp[i]=='\\' && i+1<sdp.size() && sdp[i+1]=='r') {
-                sdp_un += '\r'; i++;
-            } else {
-                sdp_un += sdp[i];
-            }
-        }
-        std::cout << "[HTTP] /answer: SDP unescaped len=" << sdp_un.size() << "\n";
-
-        GstSDPMessage* msg;
-        gst_sdp_message_new(&msg);
-        GstSDPResult r = gst_sdp_message_parse_buffer(
-            (guint8*)sdp_un.c_str(), sdp_un.size(), msg);
-        if (r != GST_SDP_OK) {
-            std::cerr << "[HTTP] /answer: parse SDP failed r=" << r << "\n";
-            res.status = 400; return;
+        // Unescape
+        std::string un;
+        for(size_t i=0;i<sdp.size();i++){
+            if(sdp[i]=='\\'&&i+1<sdp.size()&&sdp[i+1]=='n'){un+='\n';i++;}
+            else if(sdp[i]=='\\'&&i+1<sdp.size()&&sdp[i+1]=='r'){un+='\r';i++;}
+            else un+=sdp[i];
         }
 
-        GstWebRTCSessionDescription* answer =
-            gst_webrtc_session_description_new(
-                GST_WEBRTC_SDP_TYPE_ANSWER, msg);
-        GstPromise* p = gst_promise_new();
-        g_signal_emit_by_name(g_ctx.webrtcbin,
-                              "set-remote-description", answer, p);
-        gst_promise_interrupt(p);
-        gst_promise_unref(p);
-        gst_webrtc_session_description_free(answer);
-
-        std::cout << "[HTTP] /answer: set-remote-description OK\n";
-        res.set_content("{\"ok\":true}", "application/json");
+        GstSDPMessage* msg; gst_sdp_message_new(&msg);
+        if(gst_sdp_message_parse_buffer((guint8*)un.c_str(),un.size(),msg)!=GST_SDP_OK){
+            r.status=400; return;
+        }
+        GstWebRTCSessionDescription* ans=
+            gst_webrtc_session_description_new(GST_WEBRTC_SDP_TYPE_ANSWER,msg);
+        GstPromise* p=gst_promise_new();
+        g_signal_emit_by_name(g_ctx.webrtcbin,"set-remote-description",ans,p);
+        gst_promise_interrupt(p); gst_promise_unref(p);
+        gst_webrtc_session_description_free(ans);
+        r.set_content("{\"ok\":true}","application/json");
     });
 
-    svr.Post("/ice", [](const httplib::Request& req, httplib::Response& res) {
-        auto& body = req.body;
-        std::cout << "[HTTP] POST /ice: "
-                  << body.substr(0, 80) << "\n";
-
-        auto pos1 = body.find("\"candidate\"");
-        if (pos1 == std::string::npos) { res.status=400; return; }
-        auto pos2 = body.find("\"", pos1 + 12);
-        auto pos3 = body.find("\"", pos2 + 1);
-        std::string cand = body.substr(pos2 + 1, pos3 - pos2 - 1);
-
-        auto pm = body.find("\"sdpMLineIndex\"");
-        int mline = 0;
-        if (pm != std::string::npos) {
-            try { mline = std::stoi(body.substr(pm + 16, 3)); }
-            catch(...) {}
-        }
-        g_signal_emit_by_name(g_ctx.webrtcbin,
-                              "add-ice-candidate", mline, cand.c_str());
-        res.set_content("{\"ok\":true}", "application/json");
+    svr.Post("/ice", [](const httplib::Request& req, httplib::Response& r){
+        auto& b=req.body;
+        auto p1=b.find("\"candidate\""); if(p1==std::string::npos){r.status=400;return;}
+        auto p2=b.find("\"",p1+12);
+        auto p3=b.find("\"",p2+1);
+        std::string cand=b.substr(p2+1,p3-p2-1);
+        auto pm=b.find("\"sdpMLineIndex\"");
+        int mline=0;
+        if(pm!=std::string::npos) try{mline=std::stoi(b.substr(pm+16,3));}catch(...){}
+        g_signal_emit_by_name(g_ctx.webrtcbin,"add-ice-candidate",mline,cand.c_str());
+        r.set_content("{\"ok\":true}","application/json");
     });
 
-    svr.Get("/ice_candidates", [](const httplib::Request&,
-                                   httplib::Response& res) {
+    svr.Get("/ice_candidates", [](const httplib::Request&, httplib::Response& r){
         std::lock_guard<std::mutex> lk(g_ctx.sdp_mutex);
-        std::string arr = "[";
-        for (size_t i = 0; i < g_ctx.local_ice.size(); i++) {
-            if (i) arr += ",";
-            arr += g_ctx.local_ice[i];
+        std::string arr="[";
+        for(size_t i=0;i<g_ctx.local_ice.size();i++){
+            if(i) arr+=",";
+            arr+=g_ctx.local_ice[i];
         }
-        arr += "]";
+        arr+="]";
         g_ctx.local_ice.clear();
-        res.set_content(arr, "application/json");
+        r.set_content(arr,"application/json");
     });
 
-    std::cout << "[INFO] Signaling server: http://0.0.0.0:" << port << "\n";
+    std::cout << "[HTTP] Signaling: http://0.0.0.0:" << port << "\n";
     svr.listen("0.0.0.0", port);
 }
 
@@ -725,104 +552,121 @@ void run_signaling_server(int port) {
 // ===============================================================
 int main(int argc, char* argv[]) {
     Config cfg;
-    for (int i = 1; i < argc - 1; i++) {
-        std::string a = argv[i];
-        if (a == "--model")  cfg.model_dir  = argv[i+1];
-        if (a == "--port")   cfg.port       = std::stoi(argv[i+1]);
-        if (a == "--conf")   cfg.conf_thres = std::stof(argv[i+1]);
-        if (a == "--width")  cfg.cam_w      = std::stoi(argv[i+1]);
-        if (a == "--height") cfg.cam_h      = std::stoi(argv[i+1]);
-        if (a == "--fps")    cfg.cam_fps    = std::stoi(argv[i+1]);
+    for (int i=1; i<argc-1; i++) {
+        std::string a=argv[i];
+        if(a=="--model") cfg.model_dir =argv[i+1];
+        if(a=="--port")  cfg.port      =std::stoi(argv[i+1]);
+        if(a=="--conf")  cfg.conf_thres=std::stof(argv[i+1]);
+        if(a=="--skip")  cfg.skip      =std::stoi(argv[i+1]);
+        if(a=="--w")     cfg.cam_w     =std::stoi(argv[i+1]);
+        if(a=="--h")     cfg.cam_h     =std::stoi(argv[i+1]);
+        if(a=="--fps")   cfg.cam_fps   =std::stoi(argv[i+1]);
     }
 
     std::cout << "[CONFIG] model=" << cfg.model_dir
-              << " cam=" << cfg.cam_w << "x" << cfg.cam_h
-              << "@" << cfg.cam_fps << "fps port=" << cfg.port << "\n";
+              << " " << cfg.cam_w << "x" << cfg.cam_h
+              << "@" << cfg.cam_fps << " roi=" << cfg.roi_size
+              << " infer=" << cfg.infer_size
+              << " conf=" << cfg.conf_thres
+              << " skip=" << cfg.skip
+              << " port=" << cfg.port << "\n";
 
     // Load class names
     std::vector<std::string> class_names;
-    std::ifstream cls_file(cfg.model_dir + "/classes.txt");
-    if (cls_file.is_open()) {
+    std::ifstream f(cfg.model_dir + "/classes.txt");
+    if (f.is_open()) {
         std::string line;
-        while (std::getline(cls_file, line))
-            if (!line.empty()) class_names.push_back(line);
-        std::cout << "[INFO] Loaded " << class_names.size()
-                  << " classes\n";
+        while(std::getline(f,line))
+            if(!line.empty()) class_names.push_back(line);
+        std::cout << "[INFO] " << class_names.size() << " classes\n";
     } else {
-        std::cout << "[WARN] classes.txt not found, using cls0..cls79\n";
-        for (int i = 0; i < 80; i++)
-            class_names.push_back("cls" + std::to_string(i));
+        std::cerr << "[WARN] classes.txt not found!\n";
+        // Fallback 7 class cu the
+        class_names = {"Background","HinhLapPhuong_Do","HinhLapPhuong_Vang",
+                       "HinhLapPhuong_Xanh","HinhTru_Do","HinhTru_Vang","HinhTru_Xanh"};
     }
 
     // Load NCNN
     YoloNcnn yolo;
-    if (!yolo.load(cfg.model_dir, cfg.num_threads)) return 1;
+    if (!yolo.load(cfg.model_dir, cfg.threads)) return 1;
 
-    // GStreamer
-    if (!init_gstreamer_pipeline(cfg)) return 1;
+    // Khoi dong Camera (dung camera.h/cpp — BGR output)
+    Camera cam;
+    if (!cam.start(cfg.cam_w, cfg.cam_h, cfg.cam_fps)) return 1;
 
-    // Camera
-    const std::string cam_cmd =
-        "rpicam-vid -t 0 --width 640 --height 480 --framerate 30 "
-        "--codec mjpeg -o - 2>/dev/null | "
-        "ffmpeg -f mjpeg -i pipe:0 "
-        "-f rawvideo -pix_fmt bgr24 -vf scale=640:480 pipe:1 2>/dev/null";
+    // Khoi dong GStreamer WebRTC
+    if (!init_webrtc(cfg)) return 1;
 
-    FILE* cam_pipe = popen(cam_cmd.c_str(), "r");
-    if (!cam_pipe) {
-        std::cerr << "[ERROR] Khong mo duoc cam_pipe\n";
-        return 1;
-    }
-    std::cout << "[INFO] Camera pipe opened OK (640x480 BGR)\n";
-
-    // Signaling server in thread rieng
-    std::thread([&]() { run_signaling_server(cfg.port); }).detach();
+    // HTTP signaling server
+    std::thread([&]{ run_http(cfg.port); }).detach();
 
     std::cout << "\n[READY] Mo trinh duyet: http://<IP_PI>:"
               << cfg.port << "\n\n";
 
-    // Main loop
+    // ROI offset
+    int sx = (cfg.cam_w  - cfg.roi_size) / 2;
+    int sy = (cfg.cam_h - cfg.roi_size) / 2;
+
+    // Adaptive skip
+    int   skip      = cfg.skip;
+    float fps_smooth = (float)cfg.cam_fps;
+    int   frame_cnt  = 0;
+    auto  t_prev     = std::chrono::steady_clock::now();
+    std::vector<Detection> last_dets;
+
     cv::Mat frame;
-    auto  t_prev    = std::chrono::steady_clock::now();
-    float fps_smooth = 0.f;
-    int   frame_count = 0;
-
-    const int frame_bytes = 640 * 480 * 3;
-    frame = cv::Mat(480, 640, CV_8UC3);
-
     while (g_ctx.running) {
-        size_t n = fread(frame.data, 1, frame_bytes, cam_pipe);
-        if (n != (size_t)frame_bytes) {
-            std::cerr << "[CAM] pipe read error n=" << n << "\n";
-            break;
+        // Lay frame BGR tu Camera (libcamerasrc → BGR)
+        if (!cam.get_frame(frame)) continue;
+
+        // Crop ROI vuong o giua
+        cv::Mat roi = frame(cv::Rect(sx, sy, cfg.roi_size, cfg.roi_size));
+
+        // Inference moi skip frame
+        if (frame_cnt % skip == 0) {
+            try {
+                last_dets = yolo.detect(roi,
+                                        cfg.infer_size,
+                                        cfg.conf_thres,
+                                        cfg.nms_thres,
+                                        class_names);
+            } catch (...) {
+                std::cerr << "[YOLO] exception!\n";
+            }
         }
+        frame_cnt++;
 
-        auto dets = yolo.detect(frame,
-                                 cfg.infer_w, cfg.infer_h,
-                                 cfg.conf_thres, cfg.nms_thres,
-                                 class_names);
+        // Ve overlay len frame goc BGR
+        // bbox trong last_dets la toa do trong ROI
+        // draw_overlay tu dong offset +sx,+sy
+        draw_overlay(frame, last_dets,
+                     sx, sy, cfg.roi_size,
+                     fps_smooth, skip, class_names);
 
-        auto t1 = std::chrono::steady_clock::now();
-        float dt = std::chrono::duration<float>(t1 - t_prev).count();
-        t_prev = t1;
-        if (dt > 0) fps_smooth = fps_smooth * 0.9f + (1.f/dt) * 0.1f;
-
-        draw_detections(frame, dets, fps_smooth);
+        // Push BGR frame vao GStreamer (caps=BGR)
         push_frame(frame, cfg.cam_fps);
 
-        if (++frame_count % 60 == 0) {
-            std::cout << "[MAIN] frame=" << frame_count
-                      << " fps=" << std::fixed
-                      << std::setprecision(1) << fps_smooth
-                      << " dets=" << dets.size()
+        // FPS + adaptive skip
+        auto t1 = std::chrono::steady_clock::now();
+        float dt = std::chrono::duration<float>(t1-t_prev).count();
+        t_prev = t1;
+        if (dt > 0) fps_smooth = fps_smooth*0.9f + (1.f/dt)*0.1f;
+
+        if      (fps_smooth < 20.f) skip = std::min(skip+1, 6);
+        else if (fps_smooth > 28.f) skip = std::max(skip-1, 2);
+
+        if (frame_cnt % 60 == 0) {
+            std::cout << "[MAIN] frame=" << frame_cnt
+                      << " fps=" << std::fixed << std::setprecision(1) << fps_smooth
+                      << " dets=" << last_dets.size()
+                      << " skip=" << skip
                       << " pushed=" << g_ctx.frames_pushed.load()
-                      << " dropped=" << g_ctx.frames_dropped.load()
-                      << "\n";
+                      << " dropped=" << g_ctx.frames_dropped.load() << "\n";
         }
     }
 
+    cam.stop();
     gst_element_set_state(g_ctx.pipeline, GST_STATE_NULL);
     gst_object_unref(g_ctx.pipeline);
-    pclose(cam_pipe);
     return 0;
 }

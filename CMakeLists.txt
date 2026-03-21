@@ -14,9 +14,30 @@ find_package(OpenCV REQUIRED)
 include_directories(${OpenCV_INCLUDE_DIRS})
 include_directories(/home/pi4/ncnn/build/install/include)
 # ── NCNN ──────────────────────────────────────
-# Cài ncnn trước: sudo apt install libncnn-dev
-# Hoặc build từ source: https://github.com/Tencent/ncnn
-find_package(ncnn REQUIRED)
+# Build từ source: https://github.com/Tencent/ncnn
+# Tìm ncnn build từ source (cài vào /usr/local)
+find_package(ncnn QUIET)
+if(NOT ncnn_FOUND)
+    # Fallback: tìm thủ công
+    find_path(NCNN_INCLUDE_DIR ncnn/net.h
+        PATHS /usr/local/include /usr/include)
+    find_library(NCNN_LIB ncnn
+        PATHS /usr/local/lib /usr/lib)
+    if(NCNN_INCLUDE_DIR AND NCNN_LIB)
+        message(STATUS "NCNN found manually: ${NCNN_LIB}")
+        include_directories(${NCNN_INCLUDE_DIR})
+        set(NCNN_LIBRARIES ${NCNN_LIB})
+    else()
+        message(FATAL_ERROR "NCNN not found. Build from source:\n"
+            "  cd ~ && git clone https://github.com/Tencent/ncnn.git\n"
+            "  cd ncnn && git submodule update --init\n"
+            "  mkdir build && cd build\n"
+            "  cmake .. -DNCNN_VULKAN=OFF -DNCNN_SHARED_LIB=ON\n"
+            "  make -j4 && sudo make install")
+    endif()
+else()
+    set(NCNN_LIBRARIES ncnn)
+endif()
 
 # ── GStreamer ─────────────────────────────────
 find_package(PkgConfig REQUIRED)
@@ -34,11 +55,13 @@ include_directories(
 )
 
 # ── Executable ────────────────────────────────
-add_executable(yolo_stream main.cpp)
+add_executable(yolo_stream main.cpp camera.cpp)
+
+include_directories(${CMAKE_SOURCE_DIR})  # camera.h
 
 target_link_libraries(yolo_stream
     ${OpenCV_LIBS}
-    ncnn
+    ${NCNN_LIBRARIES}
     ${GST_LIBRARIES}
     ${GST_APP_LIBRARIES}
     ${GST_WEBRTC_LIBRARIES}

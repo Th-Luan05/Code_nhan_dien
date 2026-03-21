@@ -8,6 +8,7 @@ set(CMAKE_DEPENDS_LANGUAGES
 
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
+  "/home/pi4/Yolo_stream/camera.cpp" "CMakeFiles/yolo_stream.dir/camera.cpp.o" "gcc" "CMakeFiles/yolo_stream.dir/camera.cpp.o.d"
   "/home/pi4/Yolo_stream/main.cpp" "CMakeFiles/yolo_stream.dir/main.cpp.o" "gcc" "CMakeFiles/yolo_stream.dir/main.cpp.o.d"
   )
 

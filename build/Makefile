@@ -129,6 +129,30 @@ yolo_stream/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/yolo_stream.dir/build.make CMakeFiles/yolo_stream.dir/build
 .PHONY : yolo_stream/fast
 
+camera.o: camera.cpp.o
+.PHONY : camera.o
+
+# target to build an object file
+camera.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/yolo_stream.dir/build.make CMakeFiles/yolo_stream.dir/camera.cpp.o
+.PHONY : camera.cpp.o
+
+camera.i: camera.cpp.i
+.PHONY : camera.i
+
+# target to preprocess a source file
+camera.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/yolo_stream.dir/build.make CMakeFiles/yolo_stream.dir/camera.cpp.i
+.PHONY : camera.cpp.i
+
+camera.s: camera.cpp.s
+.PHONY : camera.s
+
+# target to generate assembly for a file
+camera.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/yolo_stream.dir/build.make CMakeFiles/yolo_stream.dir/camera.cpp.s
+.PHONY : camera.cpp.s
+
 main.o: main.cpp.o
 .PHONY : main.o
 
@@ -162,6 +186,9 @@ help:
 	@echo "... edit_cache"
 	@echo "... rebuild_cache"
 	@echo "... yolo_stream"
+	@echo "... camera.o"
+	@echo "... camera.i"
+	@echo "... camera.s"
 	@echo "... main.o"
 	@echo "... main.i"
 	@echo "... main.s"
