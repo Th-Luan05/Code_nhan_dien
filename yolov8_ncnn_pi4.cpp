@@ -1,29 +1,3 @@
-/**
- * YOLOv8 NCNN – Raspberry Pi 4
- * ==============================
- * - Hiển thị : full frame 1280×720 qua MJPEG :8080
- * - Inference : crop ROI 480×480 trung tâm → letterbox 320×320
- * - Tọa độ   : bbox map về frame gốc 1280×720
- * - JSON      : gửi bbox + roi qua :8081 (HTTP + CORS)
- *
- * Letterbox 480×480 → 320×320:
- *   scale = 320/480 = 0.6667
- *   new_w = new_h = 320  (vuông nên pad = 0)
- *
- * Biên dịch:
- *   g++ -O2 -std=c++17 yolov8_ncnn_pi4.cpp \
- *       -I~/ncnn_install/include/ncnn \
- *       -L~/ncnn_install/lib -lncnn \
- *       $(pkg-config --cflags --libs opencv4) \
- *       -pthread -o yolov8_pi4
- *
- * Chạy:
- *   ./yolov8_pi4
- *   ./yolov8_pi4 --port 8080
- *   libcamera-vid -t 0 --width 1280 --height 720 --framerate 10 \
- *     --codec mjpeg --nopreview -o - 2>/dev/null | \
- *   ./yolov8_pi4 --video /dev/stdin
- */
 
 #include <iostream>
 #include <string>
@@ -33,6 +7,10 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <atomic>
+#include <mutex>
+#include <thread>
+#include <condition_variable>
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -41,6 +19,7 @@
 #include <ifaddrs.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <signal.h>
 
 #include "net.h"
 #include <opencv2/opencv.hpp>
@@ -52,48 +31,42 @@ static const std::string BIN_PATH   = "best_ncnn_model/model.ncnn.bin";
 static const char* INPUT_LAYER      = "in0";
 static const char* OUTPUT_LAYER     = "out0";
 
-// Frame gốc
 static const int CAM_W    = 640;
 static const int CAM_H    = 360;
 
-// Vùng nhận diện (hình chữ nhật) – chỉnh ROI_W và ROI_H theo ý muốn
-static const int ROI_W  = 300;                    // ← chiều rộng
-static const int ROI_H  = 200;                    // ← chiều cao
-static const int ROI_X0 = (CAM_W - ROI_W) / 2;   // tự căn giữa = 320
-static const int ROI_Y0 = (CAM_H - ROI_H) / 2;   // tự căn giữa = 120
+static const int ROI_W  = 300;
+static const int ROI_H  = 200;
+static const int ROI_X0 = (CAM_W - ROI_W) / 2;
+static const int ROI_Y0 = (CAM_H - ROI_H) / 2;
 
-// Model input
 static const int NET_SIZE = 320;
 
-// Letterbox ROI → NET_SIZE×NET_SIZE, tính động trong init_letterbox()
 static float LB_SCALE = 1.f;
 static int   LB_PAD_X = 0;
 static int   LB_PAD_Y = 0;
+static int   LB_NW    = 0;
+static int   LB_NH    = 0;
 
 void init_letterbox()
 {
     float sw = (float)NET_SIZE / ROI_W;
     float sh = (float)NET_SIZE / ROI_H;
     LB_SCALE  = std::min(sw, sh);
-    int nw    = (int)std::round(ROI_W * LB_SCALE);
-    int nh    = (int)std::round(ROI_H * LB_SCALE);
-    LB_PAD_X  = (NET_SIZE - nw) / 2;
-    LB_PAD_Y  = (NET_SIZE - nh) / 2;
+    LB_NW     = (int)std::round(ROI_W * LB_SCALE);
+    LB_NH     = (int)std::round(ROI_H * LB_SCALE);
+    LB_PAD_X  = (NET_SIZE - LB_NW) / 2;
+    LB_PAD_Y  = (NET_SIZE - LB_NH) / 2;
     std::cout << "[INFO] ROI " << ROI_W << "x" << ROI_H
               << " @ (" << ROI_X0 << "," << ROI_Y0 << ")\n"
               << "[INFO] Letterbox scale=" << LB_SCALE
+              << " nw=" << LB_NW << " nh=" << LB_NH
               << " pad=(" << LB_PAD_X << "," << LB_PAD_Y << ")\n";
 }
 
-static const int   NUM_CLASSES  = 7;
-static const float CONF_THRESH  = 0.45f;
+static const int   NUM_CLASSES  = 8;
+static const float CONF_THRESH  = 0.8f;
 static const float NMS_THRESH   = 0.45f;
-
-// Skip frame: inference 1 frame, bỏ qua SKIP_FRAMES-1 frame kế tiếp
-// SKIP_FRAMES=1 → inference mỗi frame (không skip)
-// SKIP_FRAMES=2 → inference 1, skip 1  → MJPEG FPS x2
-// SKIP_FRAMES=3 → inference 1, skip 2  → MJPEG FPS x3
-static const int SKIP_FRAMES = 1;
+static const int   SKIP_FRAMES  = 1;
 
 static const std::vector<std::string> CLASS_NAMES = {
     "Background",
@@ -103,6 +76,7 @@ static const std::vector<std::string> CLASS_NAMES = {
     "HinhTru_Do",
     "HinhTru_Vang",
     "HinhTru_Xanh",
+    "SP_loi"
 };
 
 // ═══════════════════════════════ STRUCT ══════════════════════════════════════
@@ -110,24 +84,72 @@ static const std::vector<std::string> CLASS_NAMES = {
 struct Detection {
     int   class_id;
     float conf;
-    int   x, y, w, h;   // tọa độ trong frame gốc 1280×720
+    int   x, y, w, h;
 };
+
+// ════════════════════ SHARED FRAME BUFFER (thread-safe) ═══════════════════════
+//
+// FIX CORE: Thay vì send() trực tiếp trong vòng lặp camera,
+// ta lưu frame JPEG vào buffer chung. Thread MJPEG/JSON đọc ra và gửi
+// độc lập. Camera không bao giờ bị block bởi network.
+
+struct SharedState {
+    // MJPEG
+    std::mutex              frame_mtx;
+    std::condition_variable frame_cv;
+    std::vector<uchar>      jpeg_data;   // frame JPEG mới nhất
+    uint64_t                frame_seq = 0; // tăng mỗi khi có frame mới
+
+    // JSON / detections
+    std::mutex              det_mtx;
+    std::vector<Detection>  dets;
+    float                   fps_infer = 0.f;
+    int                     frame_count = 0;
+
+    std::atomic<bool>       running{true};
+} g_state;
+
+// ═══════════════════════════════ COLOR CHECK ══════════════════════════════════
+
+bool is_valid_color(const cv::Mat& frame, const Detection& d,
+                    const std::string& class_name)
+{
+    if (d.w <= 10 || d.h <= 10) return true;
+
+    int cx = d.x + d.w / 2;
+    int cy = d.y + d.h / 2;
+    int pw = std::max(1, (int)(d.w * 0.4));
+    int ph = std::max(1, (int)(d.h * 0.4));
+
+    cv::Rect rc(cx - pw/2, cy - ph/2, pw, ph);
+    rc &= cv::Rect(0, 0, frame.cols, frame.rows);
+    if (rc.empty()) return true;
+
+    cv::Mat hsv;
+    cv::cvtColor(frame(rc), hsv, cv::COLOR_BGR2HSV);
+    double avg_hue = cv::mean(hsv)[0];
+
+    if      (class_name.find("Do")   != std::string::npos)
+        return (avg_hue <= 10) || (avg_hue >= 160);
+    else if (class_name.find("Vang") != std::string::npos)
+        return avg_hue >= 15 && avg_hue <= 35;
+    else if (class_name.find("Xanh") != std::string::npos)
+        return avg_hue >= 35 && avg_hue <= 85;
+    return true;
+}
 
 // ═══════════════════════════════ TIỀN XỬ LÝ ══════════════════════════════════
 
-/**
- * Crop ROI 480×480 từ frame → letterbox → 320×320
- * ROI vuông nên pad=0, chỉ resize.
- */
 ncnn::Mat preprocess(const cv::Mat& frame)
 {
-    // Static canvas: tái dùng bộ nhớ, không alloc mỗi frame
-    // pad=0 (ROI vuông) → resize thẳng vào canvas, không cần copyTo
-    static cv::Mat canvas(NET_SIZE, NET_SIZE, CV_8UC3, cv::Scalar(114, 114, 114));
+    static cv::Mat canvas(NET_SIZE, NET_SIZE, CV_8UC3, cv::Scalar(114,114,114));
 
-    // Không .clone() – tạo header ROI trỏ vào frame, resize đọc trực tiếp
     cv::Mat roi = frame(cv::Rect(ROI_X0, ROI_Y0, ROI_W, ROI_H));
-    cv::resize(roi, canvas, cv::Size(NET_SIZE, NET_SIZE), 0, 0, cv::INTER_LINEAR);
+    cv::Mat resized;
+    cv::resize(roi, resized, cv::Size(LB_NW, LB_NH), 0, 0, cv::INTER_LINEAR);
+
+    canvas.setTo(cv::Scalar(114,114,114));
+    resized.copyTo(canvas(cv::Rect(LB_PAD_X, LB_PAD_Y, LB_NW, LB_NH)));
 
     ncnn::Mat in = ncnn::Mat::from_pixels(canvas.data,
                                           ncnn::Mat::PIXEL_BGR2RGB,
@@ -140,12 +162,6 @@ ncnn::Mat preprocess(const cv::Mat& frame)
 
 // ═══════════════════════════════ GIẢI MÃ ĐẦU RA ═══════════════════════════════
 
-/**
- * Ánh xạ ngược:
- *   NET_SIZE space
- *     → bỏ letterbox pad, chia scale  → ROI space (480×480)
- *     → cộng ROI_X0, ROI_Y0           → frame gốc (1280×720)
- */
 std::vector<Detection> decode_output(const ncnn::Mat& out)
 {
     static bool first = true;
@@ -159,52 +175,32 @@ std::vector<Detection> decode_output(const ncnn::Mat& out)
     std::vector<float>      scores;
     std::vector<int>        class_ids;
 
-    // Lấy pointer 1 lần trước vòng lặp – tránh tính lại mỗi anchor
     const float* row0 = out.row(0);
     const float* row1 = out.row(1);
     const float* row2 = out.row(2);
     const float* row3 = out.row(3);
-    const float* cls_row[NUM_CLASSES];
-    for (int c = 0; c < NUM_CLASSES; c++) cls_row[c] = out.row(4 + c);
+    const float* cls_row[NUM_CLASSES-1];
+    for (int c = 0; c < NUM_CLASSES-1; c++) cls_row[c] = out.row(4 + c);
 
     for (int i = 0; i < out.w; i++) {
-        float cx = row0[i];
-        float cy = row1[i];
-        float bw = row2[i];
-        float bh = row3[i];
-
-        float best_score = -1.f;
-        int   best_cls   = -1;
-        for (int c = 0; c < NUM_CLASSES; c++) {
+        float cx = row0[i], cy = row1[i], bw = row2[i], bh = row3[i];
+        float best_score = -1.f; int best_cls = -1;
+        for (int c = 0; c < NUM_CLASSES-1; c++) {
             float s = cls_row[c][i];
             if (s > best_score) { best_score = s; best_cls = c; }
         }
-        if (best_score < CONF_THRESH) continue;
-        if (best_cls == 0) continue;
+        if (best_score < CONF_THRESH || best_cls == 0) continue;
 
-        float x1 = cx - bw * 0.5f;
-        float y1 = cy - bh * 0.5f;
-        float x2 = cx + bw * 0.5f;
-        float y2 = cy + bh * 0.5f;
+        float x1 = (cx - bw*0.5f - LB_PAD_X) / LB_SCALE + ROI_X0;
+        float y1 = (cy - bh*0.5f - LB_PAD_Y) / LB_SCALE + ROI_Y0;
+        float x2 = (cx + bw*0.5f - LB_PAD_X) / LB_SCALE + ROI_X0;
+        float y2 = (cy + bh*0.5f - LB_PAD_Y) / LB_SCALE + ROI_Y0;
 
-        // Bước 1: bỏ letterbox pad, chia scale → ROI space
-        x1 = (x1 - LB_PAD_X) / LB_SCALE;
-        y1 = (y1 - LB_PAD_Y) / LB_SCALE;
-        x2 = (x2 - LB_PAD_X) / LB_SCALE;
-        y2 = (y2 - LB_PAD_Y) / LB_SCALE;
-
-        // Clamp trong ROI
-        x1 = std::max(0.f, std::min(x1, (float)ROI_W));
-        y1 = std::max(0.f, std::min(y1, (float)ROI_H));
-        x2 = std::max(0.f, std::min(x2, (float)ROI_W));
-        y2 = std::max(0.f, std::min(y2, (float)ROI_H));
+        x1 = std::max(0.f, std::min(x1, (float)CAM_W));
+        y1 = std::max(0.f, std::min(y1, (float)CAM_H));
+        x2 = std::max(0.f, std::min(x2, (float)CAM_W));
+        y2 = std::max(0.f, std::min(y2, (float)CAM_H));
         if (x2 <= x1 || y2 <= y1) continue;
-
-        // Bước 2: dịch về frame gốc 1280×720
-        x1 += ROI_X0;
-        y1 += ROI_Y0;
-        x2 += ROI_X0;
-        y2 += ROI_Y0;
 
         boxes.push_back(cv::Rect2d(x1, y1, x2-x1, y2-y1));
         scores.push_back(best_score);
@@ -233,8 +229,6 @@ std::vector<Detection> decode_output(const ncnn::Mat& out)
 int make_json(char* buf, int bufsz, float fps_infer, int frame_count,
               const std::vector<Detection>& dets)
 {
-    // src = kích thước frame gốc để viewer scale bbox đúng
-    // roi = vùng nhận diện để viewer vẽ khung xanh
     int n = std::snprintf(buf, bufsz,
         "{\"fps_infer\":%.1f,\"frame\":%d,"
         "\"src\":[%d,%d],"
@@ -266,33 +260,227 @@ int make_server(int port)
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     int opt = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    // Buffer gửi lớn hơn để không bị block khi gửi frame 720p
-    int sndbuf = 1024 * 1024;  // 1MB
+    int sndbuf = 2 * 1024 * 1024;  // 2MB
     setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+
     struct sockaddr_in addr{};
     addr.sin_family      = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_port        = htons(port);
     if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         std::cerr << "[ERROR] bind port " << port << " thất bại\n";
+        close(fd);
         return -1;
     }
-    listen(fd, 1);
+    listen(fd, 4);  // FIX: backlog=4 để không từ chối reconnect
     fcntl(fd, F_SETFL, O_NONBLOCK);
     return fd;
 }
 
-int try_accept(int srv)
+// Gửi dữ liệu non-blocking với timeout – KHÔNG block vòng lặp camera
+// Trả về false nếu client ngắt hoặc timeout
+bool send_all_nb(int sock, const char* data, size_t len)
 {
-    struct sockaddr_in cli{};
-    socklen_t len = sizeof(cli);
-    return accept(srv, (struct sockaddr*)&cli, &len);
+    size_t total = 0;
+    while (total < len) {
+        // Dùng select với timeout 200ms để không block mãi mãi
+        fd_set wfds;
+        FD_ZERO(&wfds);
+        FD_SET(sock, &wfds);
+        struct timeval tv = {0, 200000};  // 200ms timeout
+        int sel = select(sock + 1, nullptr, &wfds, nullptr, &tv);
+        if (sel <= 0) return false;  // timeout hoặc lỗi
+
+        ssize_t sent = send(sock, data + total, len - total, MSG_NOSIGNAL);
+        if (sent <= 0) return false;
+        total += sent;
+    }
+    return true;
+}
+
+// ═══════════════════════════════ MJPEG SERVER THREAD ════════════════════════
+//
+// FIX CORE: Thread này xử lý toàn bộ MJPEG, hoàn toàn độc lập với camera.
+// Mỗi client có 1 thread riêng → hỗ trợ nhiều viewer cùng lúc.
+// Camera thread KHÔNG BAO GIỜ bị block bởi mạng chậm.
+
+void mjpeg_client_thread(int cli_fd)
+{
+    // Đặt SO_SNDBUF và TCP_NODELAY cho client này
+    int nodelay = 1, sndbuf = 1024 * 1024;
+    setsockopt(cli_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+    setsockopt(cli_fd, SOL_SOCKET, SO_SNDBUF,   &sndbuf,  sizeof(sndbuf));
+
+    // Đặt non-blocking socket để send_all_nb hoạt động đúng
+    int flags = fcntl(cli_fd, F_GETFL, 0);
+    fcntl(cli_fd, F_SETFL, flags | O_NONBLOCK);
+
+    // Đọc HTTP request (bỏ qua nội dung, chỉ cần drain buffer)
+    {
+        char req[1024] = {};
+        recv(cli_fd, req, sizeof(req)-1, MSG_DONTWAIT);
+    }
+
+    // FIX: Gửi HTTP header chuẩn RFC 2046 multipart
+    // boundary KHÔNG có "--" prefix ở Content-Type header
+    // Mỗi part bắt đầu bằng "--BOUNDARY\r\n"
+    static const char* HTTP_HDR =
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: multipart/x-mixed-replace; boundary=jpgboundary\r\n"
+        "Access-Control-Allow-Origin: *\r\n"
+        "Cache-Control: no-cache, no-store, must-revalidate\r\n"
+        "Pragma: no-cache\r\n"
+        "Connection: close\r\n"
+        "\r\n";
+
+    if (!send_all_nb(cli_fd, HTTP_HDR, strlen(HTTP_HDR))) {
+        close(cli_fd);
+        return;
+    }
+    std::cout << "[MJPEG] client kết nối fd=" << cli_fd << "\n";
+
+    uint64_t last_seq = 0;
+    std::vector<uchar> local_jpeg;
+
+    while (g_state.running.load()) {
+        // Chờ frame mới (có timeout để kiểm tra g_state.running)
+        {
+            std::unique_lock<std::mutex> lk(g_state.frame_mtx);
+            bool got = g_state.frame_cv.wait_for(lk,
+                std::chrono::milliseconds(500),
+                [&]{ return g_state.frame_seq != last_seq; });
+            if (!got) continue;  // timeout → thử lại
+
+            last_seq   = g_state.frame_seq;
+            local_jpeg = g_state.jpeg_data;  // copy nhanh (vector assignment)
+        }
+
+        // FIX: Format đúng chuẩn MJPEG multipart
+        // "--boundary\r\n"
+        // "Content-Type: image/jpeg\r\n"
+        // "Content-Length: <N>\r\n"
+        // "\r\n"
+        // <JPEG bytes>
+        // "\r\n"
+        char part_hdr[128];
+        int hlen = std::snprintf(part_hdr, sizeof(part_hdr),
+            "--jpgboundary\r\n"
+            "Content-Type: image/jpeg\r\n"
+            "Content-Length: %zu\r\n"
+            "\r\n",
+            local_jpeg.size());
+
+        bool ok =
+            send_all_nb(cli_fd, part_hdr, hlen) &&
+            send_all_nb(cli_fd, (char*)local_jpeg.data(), local_jpeg.size()) &&
+            send_all_nb(cli_fd, "\r\n", 2);
+
+        if (!ok) break;  // client ngắt
+    }
+
+    std::cout << "[MJPEG] client ngắt fd=" << cli_fd << "\n";
+    close(cli_fd);
+}
+
+// ═══════════════════════════════ JSON SERVER THREAD ═════════════════════════
+
+void json_client_thread(int cli_fd)
+{
+    int nodelay = 1;
+    setsockopt(cli_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+    int flags = fcntl(cli_fd, F_GETFL, 0);
+    fcntl(cli_fd, F_SETFL, flags | O_NONBLOCK);
+
+    {
+        char req[1024] = {};
+        recv(cli_fd, req, sizeof(req)-1, MSG_DONTWAIT);
+    }
+
+    static const char* JSON_HDR =
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/plain; charset=utf-8\r\n"
+        "Access-Control-Allow-Origin: *\r\n"
+        "Cache-Control: no-cache\r\n"
+        "Transfer-Encoding: chunked\r\n"
+        "Connection: keep-alive\r\n"
+        "\r\n";
+
+    if (!send_all_nb(cli_fd, JSON_HDR, strlen(JSON_HDR))) {
+        close(cli_fd); return;
+    }
+    std::cout << "[JSON] client kết nối fd=" << cli_fd << "\n";
+
+    // Gửi JSON mỗi khi có inference mới
+    // Dùng polling nhẹ thay vì condition_variable để tránh missed signal
+    int last_frame = -1;
+
+    while (g_state.running.load()) {
+        std::vector<Detection> dets;
+        float fps_infer;
+        int   frame_count;
+        {
+            std::lock_guard<std::mutex> lk(g_state.det_mtx);
+            frame_count = g_state.frame_count;
+            fps_infer   = g_state.fps_infer;
+            dets        = g_state.dets;
+        }
+
+        if (frame_count == last_frame) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
+        }
+        last_frame = frame_count;
+
+        char js_buf[2048];
+        int  js_len = make_json(js_buf, sizeof(js_buf), fps_infer, frame_count, dets);
+
+        char chunk_hdr[16];
+        int  hlen = std::snprintf(chunk_hdr, sizeof(chunk_hdr), "%x\r\n", js_len);
+
+        bool ok =
+            send_all_nb(cli_fd, chunk_hdr, hlen) &&
+            send_all_nb(cli_fd, js_buf,    js_len) &&
+            send_all_nb(cli_fd, "\r\n",    2);
+
+        if (!ok) break;
+    }
+
+    std::cout << "[JSON] client ngắt fd=" << cli_fd << "\n";
+    close(cli_fd);
+}
+
+// ═══════════════════════════════ ACCEPT LOOP THREAD ══════════════════════════
+
+void accept_loop(int srv_fd, bool is_mjpeg)
+{
+    while (g_state.running.load()) {
+        struct sockaddr_in cli_addr{};
+        socklen_t len = sizeof(cli_addr);
+        int cli = accept(srv_fd, (struct sockaddr*)&cli_addr, &len);
+
+        if (cli < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                continue;
+            }
+            if (!g_state.running.load()) break;
+            continue;
+        }
+
+        // Spawn thread per client
+        if (is_mjpeg)
+            std::thread(mjpeg_client_thread, cli).detach();
+        else
+            std::thread(json_client_thread, cli).detach();
+    }
 }
 
 // ═══════════════════════════════ MAIN ════════════════════════════════════════
 
 int main(int argc, char* argv[])
 {
+    signal(SIGPIPE, SIG_IGN);  // FIX: bỏ qua SIGPIPE khi client ngắt
+
     std::string video_path;
     int mjpeg_port = 8080;
 
@@ -301,13 +489,8 @@ int main(int argc, char* argv[])
         if      (a == "--video" && i+1 < argc) video_path = argv[++i];
         else if (a == "--port"  && i+1 < argc) mjpeg_port = std::stoi(argv[++i]);
         else if (a == "--help") {
-            std::cout
-                << "YOLOv8 NCNN Pi4\n\n"
-                << "  ./yolov8_pi4\n"
-                << "  ./yolov8_pi4 --port 8080\n"
-                << "  libcamera-vid -t 0 --width 1280 --height 720 \\\n"
-                << "    --framerate 10 --codec mjpeg --nopreview -o - 2>/dev/null \\\n"
-                << "  | ./yolov8_pi4 --video /dev/stdin\n";
+            std::cout << "YOLOv8 NCNN Pi4\n\n"
+                      << "  ./yolov8_pi4 [--port 8080] [--video <path>]\n";
             return 0;
         }
     }
@@ -318,10 +501,10 @@ int main(int argc, char* argv[])
     net.opt.use_vulkan_compute = false;
     net.opt.num_threads        = 4;
     if (net.load_param(PARAM_PATH.c_str()) != 0) {
-        std::cerr << "[ERROR] load param: " << PARAM_PATH << "\n"; return -1;
+        std::cerr << "[ERROR] load param\n"; return -1;
     }
     if (net.load_model(BIN_PATH.c_str()) != 0) {
-        std::cerr << "[ERROR] load bin: "   << BIN_PATH   << "\n"; return -1;
+        std::cerr << "[ERROR] load bin\n";   return -1;
     }
     std::cout << "[INFO] Model OK\n";
     init_letterbox();
@@ -336,8 +519,6 @@ int main(int argc, char* argv[])
             ",framerate=10/1,format=NV12 ! "
             "videoconvert ! video/x-raw,format=BGR ! "
             "appsink drop=true max-buffers=2 sync=false";
-
-        std::cout << "[INFO] Thử GStreamer...\n";
         cap.open(gst, cv::CAP_GSTREAMER);
         if (!cap.isOpened()) {
             std::cout << "[WARN] GStreamer thất bại, thử V4L2...\n";
@@ -357,21 +538,14 @@ int main(int argc, char* argv[])
     }
 
     if (!cap.isOpened()) {
-        std::cerr << "[ERROR] Không mở được camera.\n\n"
-                  << "Thử pipe:\n"
-                  << "  libcamera-vid -t 0 --width 1280 --height 720 \\\n"
-                  << "    --framerate 10 --codec mjpeg --nopreview -o - 2>/dev/null \\\n"
-                  << "  | ./yolov8_pi4 --video /dev/stdin\n";
-        return -1;
+        std::cerr << "[ERROR] Không mở được camera.\n"; return -1;
     }
-    std::cout << "[INFO] Camera OK: " << CAM_W << "x" << CAM_H << "\n";
 
     // ── TCP servers ───────────────────────────────────────────────────────────
     int mjpeg_srv = make_server(mjpeg_port);
     int json_srv  = make_server(json_port);
     if (mjpeg_srv < 0 || json_srv < 0) return -1;
 
-    // Lấy IP Pi
     char ip_buf[64] = "?.?.?.?";
     struct ifaddrs* ifa;
     getifaddrs(&ifa);
@@ -394,142 +568,83 @@ int main(int argc, char* argv[])
         << "╚══════════════════════════════════════════════╝\n\n"
         << "[INFO] Chờ kết nối... Ctrl+C để dừng.\n";
 
-    // ── Vòng lặp chính ───────────────────────────────────────────────────────
+    // ── Khởi động accept threads ──────────────────────────────────────────────
+    std::thread mjpeg_accept(accept_loop, mjpeg_srv, true);
+    std::thread json_accept (accept_loop, json_srv,  false);
+    mjpeg_accept.detach();
+    json_accept.detach();
+
+    // ── Vòng lặp camera chính (KHÔNG bao giờ bị block bởi network) ───────────
     cv::Mat frame;
-    int     frame_count = 0;
-
-    int mjpeg_cli = -1;
-    int json_cli  = -1;
-
-    std::vector<uchar> jpeg_buf;
-    std::vector<int>   jpeg_params = {cv::IMWRITE_JPEG_QUALITY, 55};
-
-    // Skip frame: giữ kết quả detect của lần inference gần nhất
+    int frame_count = 0;
     std::vector<Detection> last_dets;
-    int infer_count = 0;
 
-    // FPS inference: đo thời gian giữa 2 lần chạy model
     float fps_infer = 0.f;
     auto  t_infer   = std::chrono::steady_clock::now();
 
-    while (true) {
+    std::vector<int>   jpeg_params = {cv::IMWRITE_JPEG_QUALITY, 55};
+    std::vector<uchar> jpeg_buf;
+
+    while (g_state.running.load()) {
         if (!cap.read(frame) || frame.empty()) break;
         if (frame.cols != CAM_W || frame.rows != CAM_H)
             cv::resize(frame, frame, cv::Size(CAM_W, CAM_H));
 
-        // ── Inference với skip frame ──────────────────────────────────────────
-        // Chỉ inference 1 trong SKIP_FRAMES frame, frame còn lại dùng kết quả cũ
         bool do_infer = (frame_count % SKIP_FRAMES == 0);
+
         if (do_infer) {
             ncnn::Mat in = preprocess(frame);
             ncnn::Extractor ex = net.create_extractor();
             ex.input(INPUT_LAYER, in);
             ncnn::Mat out;
             ex.extract(OUTPUT_LAYER, out);
-            last_dets = decode_output(out);
-            infer_count++;
-        }
-        // Dùng kết quả detect gần nhất cho mọi frame
-        const auto& dets = last_dets;
 
-        // ── FPS infer: chỉ cập nhật khi thực sự chạy model ─────────────────────
-        if (do_infer) {
+            last_dets = decode_output(out);
+
+            for (auto& d : last_dets) {
+                if (d.class_id == 0) continue;
+                if (!is_valid_color(frame, d, CLASS_NAMES[d.class_id]))
+                    d.class_id = 7;
+            }
+
             auto  t_now = std::chrono::steady_clock::now();
             float dt    = std::chrono::duration<float>(t_now - t_infer).count();
             t_infer     = t_now;
             fps_infer   = fps_infer * 0.9f + (1.f / (dt + 1e-9f)) * 0.1f;
+
+            // Cập nhật JSON state
+            {
+                std::lock_guard<std::mutex> lk(g_state.det_mtx);
+                g_state.dets        = last_dets;
+                g_state.fps_infer   = fps_infer;
+                g_state.frame_count = frame_count;
+            }
         }
+
+        // FIX CORE: Encode JPEG một lần, đặt vào shared buffer
+        // Tất cả MJPEG client threads sẽ tự lấy ra gửi đi
+        cv::imencode(".jpg", frame, jpeg_buf, jpeg_params);
+        {
+            std::lock_guard<std::mutex> lk(g_state.frame_mtx);
+            g_state.jpeg_data = jpeg_buf;
+            g_state.frame_seq++;
+        }
+        g_state.frame_cv.notify_all();  // đánh thức tất cả client threads
+
         frame_count++;
 
-        // ── Terminal log mỗi 30 frame ─────────────────────────────────────────
         if (frame_count % 30 == 0) {
             std::cout << "[F" << frame_count << "]"
                       << " infer=" << (int)fps_infer << "fps"
-                      << " obj="   << dets.size();
-            for (auto& d : dets)
-                std::cout << " " << CLASS_NAMES[d.class_id]
-                          << "(" << (int)(d.conf*100) << "%)";
-            std::cout << "\n";
+                      << " obj="   << last_dets.size() << "\n";
             std::cout.flush();
-        }
-
-        // ── Accept client mới (non-blocking) ──────────────────────────────────
-        if (mjpeg_cli < 0) {
-            int fd = try_accept(mjpeg_srv);
-            if (fd >= 0) {
-                mjpeg_cli = fd;
-                // TCP_NODELAY: gửi ngay không chờ buffer đầy (giảm lag)
-                int nodelay = 1;
-                setsockopt(mjpeg_cli, IPPROTO_TCP, TCP_NODELAY,
-                           &nodelay, sizeof(nodelay));
-                // Buffer gửi 1MB cho client này
-                int sndbuf = 1024 * 1024;
-                setsockopt(mjpeg_cli, SOL_SOCKET, SO_SNDBUF,
-                           &sndbuf, sizeof(sndbuf));
-                const char* hdr =
-                    "HTTP/1.1 200 OK\r\n"
-                    "Content-Type: multipart/x-mixed-replace;boundary=f\r\n"
-                    "Access-Control-Allow-Origin: *\r\n"
-                    "\r\n";
-                send(mjpeg_cli, hdr, strlen(hdr), MSG_NOSIGNAL);
-                std::cout << "[INFO] MJPEG client kết nối\n";
-            }
-        }
-        if (json_cli < 0) {
-            int fd = try_accept(json_srv);
-            if (fd >= 0) {
-                json_cli = fd;
-                char req_buf[1024] = {};
-                recv(json_cli, req_buf, sizeof(req_buf)-1, 0);
-                const char* json_hdr =
-                    "HTTP/1.1 200 OK\r\n"
-                    "Content-Type: text/plain; charset=utf-8\r\n"
-                    "Access-Control-Allow-Origin: *\r\n"
-                    "Cache-Control: no-cache\r\n"
-                    "Transfer-Encoding: chunked\r\n"
-                    "\r\n";
-                send(json_cli, json_hdr, strlen(json_hdr), MSG_NOSIGNAL);
-                std::cout << "[INFO] JSON client kết nối\n";
-            }
-        }
-
-        // ── Gửi MJPEG (full frame 1280×720) ───────────────────────────────────
-        if (mjpeg_cli >= 0) {
-            cv::imencode(".jpg", frame, jpeg_buf, jpeg_params);
-            char phdr[96];
-            int  plen = std::snprintf(phdr, sizeof(phdr),
-                "--f\r\nContent-Type: image/jpeg\r\n"
-                "Content-Length: %zu\r\n\r\n", jpeg_buf.size());
-            int r1 = send(mjpeg_cli, phdr,             plen,             MSG_NOSIGNAL);
-            int r2 = send(mjpeg_cli, jpeg_buf.data(),  jpeg_buf.size(),  MSG_NOSIGNAL);
-            int r3 = send(mjpeg_cli, "\r\n",           2,                MSG_NOSIGNAL);
-            if (r1 < 0 || r2 < 0 || r3 < 0) {
-                std::cout << "[INFO] MJPEG client ngắt (errno=" << errno << ")\n";
-                close(mjpeg_cli); mjpeg_cli = -1;
-                // Xóa bbox cũ sẽ không đúng nữa – giữ nguyên last_dets
-            }
-        }
-
-        // ── Gửi JSON (chunked) – chỉ khi vừa inference xong ─────────────────
-        if (json_cli >= 0 && do_infer) {
-            static char js_buf[2048];
-            int js_len = make_json(js_buf, sizeof(js_buf), fps_infer, frame_count, dets);
-            char chunk_hdr[16];
-            int  hlen = std::snprintf(chunk_hdr, sizeof(chunk_hdr),
-                                      "%x\r\n", js_len);
-            int r1 = send(json_cli, chunk_hdr, hlen,     MSG_NOSIGNAL);
-            int r2 = send(json_cli, js_buf,    js_len,   MSG_NOSIGNAL);
-            int r3 = send(json_cli, "\r\n", 2,           MSG_NOSIGNAL);
-            if (r1 < 0 || r2 < 0 || r3 < 0) {
-                std::cout << "[INFO] JSON client ngắt\n";
-                close(json_cli); json_cli = -1;
-            }
         }
     }
 
+    g_state.running = false;
+    g_state.frame_cv.notify_all();
+
     cap.release();
-    if (mjpeg_cli >= 0) close(mjpeg_cli);
-    if (json_cli  >= 0) close(json_cli);
     close(mjpeg_srv);
     close(json_srv);
     std::cout << "[INFO] Done. Frame: " << frame_count << "\n";
