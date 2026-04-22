@@ -117,41 +117,41 @@ depend:
 .PHONY : depend
 
 #=============================================================================
-# Target rules for targets named yolov8_pi4
+# Target rules for targets named tenfile
 
 # Build rule for target.
-yolov8_pi4: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 yolov8_pi4
-.PHONY : yolov8_pi4
+tenfile: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 tenfile
+.PHONY : tenfile
 
 # fast build rule for target.
-yolov8_pi4/fast:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/yolov8_pi4.dir/build.make CMakeFiles/yolov8_pi4.dir/build
-.PHONY : yolov8_pi4/fast
+tenfile/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tenfile.dir/build.make CMakeFiles/tenfile.dir/build
+.PHONY : tenfile/fast
 
-yolov8_ncnn_pi4.o: yolov8_ncnn_pi4.cpp.o
-.PHONY : yolov8_ncnn_pi4.o
+test.o: test.cpp.o
+.PHONY : test.o
 
 # target to build an object file
-yolov8_ncnn_pi4.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/yolov8_pi4.dir/build.make CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o
-.PHONY : yolov8_ncnn_pi4.cpp.o
+test.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tenfile.dir/build.make CMakeFiles/tenfile.dir/test.cpp.o
+.PHONY : test.cpp.o
 
-yolov8_ncnn_pi4.i: yolov8_ncnn_pi4.cpp.i
-.PHONY : yolov8_ncnn_pi4.i
+test.i: test.cpp.i
+.PHONY : test.i
 
 # target to preprocess a source file
-yolov8_ncnn_pi4.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/yolov8_pi4.dir/build.make CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.i
-.PHONY : yolov8_ncnn_pi4.cpp.i
+test.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tenfile.dir/build.make CMakeFiles/tenfile.dir/test.cpp.i
+.PHONY : test.cpp.i
 
-yolov8_ncnn_pi4.s: yolov8_ncnn_pi4.cpp.s
-.PHONY : yolov8_ncnn_pi4.s
+test.s: test.cpp.s
+.PHONY : test.s
 
 # target to generate assembly for a file
-yolov8_ncnn_pi4.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/yolov8_pi4.dir/build.make CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.s
-.PHONY : yolov8_ncnn_pi4.cpp.s
+test.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tenfile.dir/build.make CMakeFiles/tenfile.dir/test.cpp.s
+.PHONY : test.cpp.s
 
 # Help Target
 help:
@@ -161,10 +161,10 @@ help:
 	@echo "... depend"
 	@echo "... edit_cache"
 	@echo "... rebuild_cache"
-	@echo "... yolov8_pi4"
-	@echo "... yolov8_ncnn_pi4.o"
-	@echo "... yolov8_ncnn_pi4.i"
-	@echo "... yolov8_ncnn_pi4.s"
+	@echo "... tenfile"
+	@echo "... test.o"
+	@echo "... test.i"
+	@echo "... test.s"
 .PHONY : help
 
 

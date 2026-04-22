@@ -198,6 +198,9 @@ NCNN_LIB:FILEPATH=/home/pi4/ncnn_install/lib/libncnn.so
 //The directory containing a CMake configuration file for OpenCV.
 OpenCV_DIR:PATH=/usr/lib/aarch64-linux-gnu/cmake/opencv4
 
+//Path to a library.
+WIRINGPI_LIB:FILEPATH=/usr/local/lib/libwiringPi.so
+
 //Value Computed by CMake
 yolov8_ncnn_pi4_BINARY_DIR:STATIC=/home/pi4/project/build
 
