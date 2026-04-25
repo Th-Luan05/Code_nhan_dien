@@ -37,8 +37,17 @@ if(NOT WIRINGPI_LIB)
 endif()
 
 # Executable
-add_executable(tenfile test.cpp)
-target_link_libraries(tenfile ${NCNN_LIB} ${OpenCV_LIBS} ${WIRINGPI_LIB} pthread)
+add_executable(yolov8_pi4
+    yolov8_ncnn_pi4.cpp
+    Pi4RobotDriver.cpp
+)
+target_link_libraries(yolov8_pi4
+    ${NCNN_LIB}
+    ${OpenCV_LIBS}
+    ${WIRINGPI_LIB}
+    pthread
+    curl
+)
 
 message(STATUS "Build type : ${CMAKE_BUILD_TYPE}")
 message(STATUS "OpenCV     : ${OpenCV_VERSION}")

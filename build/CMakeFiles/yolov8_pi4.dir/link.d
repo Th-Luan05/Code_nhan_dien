@@ -3,6 +3,7 @@ yolov8_pi4: \
   /usr/lib/gcc/aarch64-linux-gnu/14/../../../aarch64-linux-gnu/crti.o \
   /usr/lib/gcc/aarch64-linux-gnu/14/crtbeginS.o \
   CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o \
+  CMakeFiles/yolov8_pi4.dir/Pi4RobotDriver.cpp.o \
   /home/pi4/ncnn_install/lib/libncnn.so \
   /usr/lib/aarch64-linux-gnu/libopencv_stitching.so.4.10.0 \
   /usr/lib/aarch64-linux-gnu/libopencv_alphamat.so.4.10.0 \
@@ -40,7 +41,9 @@ yolov8_pi4: \
   /usr/lib/aarch64-linux-gnu/libopencv_wechat_qrcode.so.4.10.0 \
   /usr/lib/aarch64-linux-gnu/libopencv_xobjdetect.so.4.10.0 \
   /usr/lib/aarch64-linux-gnu/libopencv_xphoto.so.4.10.0 \
+  /usr/local/lib/libwiringPi.so \
   /usr/lib/gcc/aarch64-linux-gnu/14/../../../aarch64-linux-gnu/libpthread.a \
+  /usr/lib/gcc/aarch64-linux-gnu/14/../../../aarch64-linux-gnu/libcurl.so \
   /usr/lib/aarch64-linux-gnu/libopencv_highgui.so.4.10.0 \
   /usr/lib/aarch64-linux-gnu/libopencv_datasets.so.4.10.0 \
   /usr/lib/aarch64-linux-gnu/libopencv_plot.so.4.10.0 \
@@ -89,6 +92,21 @@ yolov8_pi4: \
   /lib/aarch64-linux-gnu/libgomp.so.1 \
   /lib/aarch64-linux-gnu/libm.so.6 \
   /lib/aarch64-linux-gnu/libmvec.so.1 \
+  /lib/aarch64-linux-gnu/libnghttp3.so.9 \
+  /lib/aarch64-linux-gnu/libnghttp2.so.14 \
+  /lib/aarch64-linux-gnu/libidn2.so.0 \
+  /lib/aarch64-linux-gnu/librtmp.so.1 \
+  /lib/aarch64-linux-gnu/libssh2.so.1 \
+  /lib/aarch64-linux-gnu/libpsl.so.5 \
+  /lib/aarch64-linux-gnu/libssl.so.3 \
+  /lib/aarch64-linux-gnu/libcrypto.so.3 \
+  /lib/aarch64-linux-gnu/libgssapi_krb5.so.2 \
+  /lib/aarch64-linux-gnu/libldap.so.2 \
+  /lib/aarch64-linux-gnu/liblber.so.2 \
+  /lib/aarch64-linux-gnu/libzstd.so.1 \
+  /lib/aarch64-linux-gnu/libbrotlidec.so.1 \
+  /lib/aarch64-linux-gnu/libz.so.1 \
+  /lib/ld-linux-aarch64.so.1 \
   /lib/aarch64-linux-gnu/libdc1394.so.25 \
   /lib/aarch64-linux-gnu/libgstbase-1.0.so.0 \
   /lib/aarch64-linux-gnu/libgstreamer-1.0.so.0 \
@@ -105,7 +123,6 @@ yolov8_pi4: \
   /lib/aarch64-linux-gnu/libswscale.so.8 \
   /lib/aarch64-linux-gnu/libgphoto2.so.6 \
   /lib/aarch64-linux-gnu/libgphoto2_port.so.12 \
-  /lib/ld-linux-aarch64.so.1 \
   /lib/aarch64-linux-gnu/libjpeg.so.62 \
   /lib/aarch64-linux-gnu/libwebp.so.7 \
   /lib/aarch64-linux-gnu/libpng16.so.16 \
@@ -116,11 +133,21 @@ yolov8_pi4: \
   /lib/aarch64-linux-gnu/libgdal.so.36 \
   /lib/aarch64-linux-gnu/libgdcmDSED.so.3.0 \
   /lib/aarch64-linux-gnu/libprotobuf.so.32 \
-  /lib/aarch64-linux-gnu/libz.so.1 \
   /lib/aarch64-linux-gnu/libGLX.so.0 \
   /lib/aarch64-linux-gnu/liblapack.so.3 \
   /lib/aarch64-linux-gnu/libblas.so.3 \
   /lib/aarch64-linux-gnu/libtbb.so.12 \
+  /lib/aarch64-linux-gnu/libunistring.so.5 \
+  /lib/aarch64-linux-gnu/libgnutls.so.30 \
+  /lib/aarch64-linux-gnu/libhogweed.so.6 \
+  /lib/aarch64-linux-gnu/libnettle.so.8 \
+  /lib/aarch64-linux-gnu/libgmp.so.10 \
+  /lib/aarch64-linux-gnu/libkrb5.so.3 \
+  /lib/aarch64-linux-gnu/libk5crypto.so.3 \
+  /lib/aarch64-linux-gnu/libcom_err.so.2 \
+  /lib/aarch64-linux-gnu/libkrb5support.so.0 \
+  /lib/aarch64-linux-gnu/libsasl2.so.2 \
+  /lib/aarch64-linux-gnu/libbrotlicommon.so.1 \
   /lib/aarch64-linux-gnu/libraw1394.so.11 \
   /lib/aarch64-linux-gnu/libusb-1.0.so.0 \
   /lib/aarch64-linux-gnu/libgmodule-2.0.so.0 \
@@ -167,7 +194,6 @@ yolov8_pi4: \
   /lib/aarch64-linux-gnu/libopenmpt.so.0 \
   /lib/aarch64-linux-gnu/libchromaprint.so.1 \
   /lib/aarch64-linux-gnu/libbluray.so.2 \
-  /lib/aarch64-linux-gnu/libgnutls.so.30 \
   /lib/aarch64-linux-gnu/librabbitmq.so.4 \
   /lib/aarch64-linux-gnu/librist.so.4 \
   /lib/aarch64-linux-gnu/libsrt-gnutls.so.1.5 \
@@ -191,7 +217,6 @@ yolov8_pi4: \
   /lib/aarch64-linux-gnu/libjson-c.so.5 \
   /lib/aarch64-linux-gnu/libgdcmIOD.so.3.0 \
   /lib/aarch64-linux-gnu/libgdcmCommon.so.3.0 \
-  /lib/aarch64-linux-gnu/libzstd.so.1 \
   /lib/aarch64-linux-gnu/libLerc.so.4 \
   /lib/aarch64-linux-gnu/libjbig.so.0 \
   /lib/aarch64-linux-gnu/libdeflate.so.0 \
@@ -201,7 +226,6 @@ yolov8_pi4: \
   /lib/aarch64-linux-gnu/libcurl-gnutls.so.4 \
   /lib/aarch64-linux-gnu/libodbc.so.2 \
   /lib/aarch64-linux-gnu/libodbcinst.so.2 \
-  /lib/aarch64-linux-gnu/libcrypto.so.3 \
   /lib/aarch64-linux-gnu/liblz4.so.1 \
   /lib/aarch64-linux-gnu/libblosc.so.1 \
   /lib/libarmadillo.so.14 \
@@ -233,6 +257,10 @@ yolov8_pi4: \
   /lib/aarch64-linux-gnu/libmfhdfalt.so.0 \
   /lib/aarch64-linux-gnu/libGLdispatch.so.0 \
   /lib/aarch64-linux-gnu/libgfortran.so.5 \
+  /lib/aarch64-linux-gnu/libp11-kit.so.0 \
+  /lib/aarch64-linux-gnu/libtasn1.so.6 \
+  /lib/aarch64-linux-gnu/libkeyutils.so.1 \
+  /lib/aarch64-linux-gnu/libresolv.so.2 \
   /lib/aarch64-linux-gnu/libsoxr.so.0 \
   /lib/aarch64-linux-gnu/libgio-2.0.so.0 \
   /lib/aarch64-linux-gnu/libgdk_pixbuf-2.0.so.0 \
@@ -253,7 +281,6 @@ yolov8_pi4: \
   /lib/aarch64-linux-gnu/libpixman-1.so.0 \
   /lib/aarch64-linux-gnu/libjxl_cms.so.0.11 \
   /lib/aarch64-linux-gnu/libhwy.so.1 \
-  /lib/aarch64-linux-gnu/libbrotlidec.so.1 \
   /lib/aarch64-linux-gnu/libbrotlienc.so.1 \
   /lib/aarch64-linux-gnu/libogg.so.0 \
   /lib/aarch64-linux-gnu/libnuma.so.1 \
@@ -261,17 +288,8 @@ yolov8_pi4: \
   /lib/aarch64-linux-gnu/libmpg123.so.0 \
   /lib/aarch64-linux-gnu/libvorbisfile.so.3 \
   /lib/aarch64-linux-gnu/libudfread.so.0 \
-  /lib/aarch64-linux-gnu/libp11-kit.so.0 \
-  /lib/aarch64-linux-gnu/libidn2.so.0 \
-  /lib/aarch64-linux-gnu/libunistring.so.5 \
-  /lib/aarch64-linux-gnu/libtasn1.so.6 \
-  /lib/aarch64-linux-gnu/libhogweed.so.6 \
-  /lib/aarch64-linux-gnu/libnettle.so.8 \
-  /lib/aarch64-linux-gnu/libgmp.so.10 \
-  /lib/aarch64-linux-gnu/libssl.so.3 \
   /lib/aarch64-linux-gnu/libmbedcrypto.so.16 \
   /lib/aarch64-linux-gnu/libcjson.so.1 \
-  /lib/aarch64-linux-gnu/libgssapi_krb5.so.2 \
   /lib/aarch64-linux-gnu/libbsd.so.0 \
   /lib/aarch64-linux-gnu/libsodium.so.23 \
   /lib/aarch64-linux-gnu/libpgm-5.3.so.0 \
@@ -279,15 +297,8 @@ yolov8_pi4: \
   /lib/aarch64-linux-gnu/libXfixes.so.3 \
   /lib/aarch64-linux-gnu/libX11-xcb.so.1 \
   /lib/aarch64-linux-gnu/libxcb-dri3.so.0 \
-  /lib/aarch64-linux-gnu/libnghttp3.so.9 \
   /lib/aarch64-linux-gnu/libngtcp2_crypto_gnutls.so.8 \
   /lib/aarch64-linux-gnu/libngtcp2.so.16 \
-  /lib/aarch64-linux-gnu/libnghttp2.so.14 \
-  /lib/aarch64-linux-gnu/librtmp.so.1 \
-  /lib/aarch64-linux-gnu/libssh2.so.1 \
-  /lib/aarch64-linux-gnu/libpsl.so.5 \
-  /lib/aarch64-linux-gnu/libldap.so.2 \
-  /lib/aarch64-linux-gnu/liblber.so.2 \
   /lib/aarch64-linux-gnu/libxxhash.so.0 \
   /lib/aarch64-linux-gnu/libarpack.so.2 \
   /lib/aarch64-linux-gnu/libicuuc.so.76 \
@@ -300,7 +311,6 @@ yolov8_pi4: \
   /lib/aarch64-linux-gnu/libplc4.so \
   /lib/aarch64-linux-gnu/libnspr4.so \
   /lib/aarch64-linux-gnu/libhdf5_serial_hl.so.310 \
-  /lib/aarch64-linux-gnu/libcurl.so.4 \
   /lib/aarch64-linux-gnu/libsz.so.2 \
   /lib/aarch64-linux-gnu/libminizip.so.1 \
   /lib/aarch64-linux-gnu/liburiparser.so.1 \
@@ -317,13 +327,7 @@ yolov8_pi4: \
   /lib/aarch64-linux-gnu/libthai.so.0 \
   /lib/aarch64-linux-gnu/libXau.so.6 \
   /lib/aarch64-linux-gnu/libXdmcp.so.6 \
-  /lib/aarch64-linux-gnu/libbrotlicommon.so.1 \
-  /lib/aarch64-linux-gnu/libkrb5.so.3 \
-  /lib/aarch64-linux-gnu/libk5crypto.so.3 \
-  /lib/aarch64-linux-gnu/libcom_err.so.2 \
-  /lib/aarch64-linux-gnu/libkrb5support.so.0 \
   /lib/aarch64-linux-gnu/libmd.so.0 \
-  /lib/aarch64-linux-gnu/libsasl2.so.2 \
   /lib/aarch64-linux-gnu/libicudata.so.76 \
   /lib/aarch64-linux-gnu/libabsl_synchronization.so.20240722 \
   /lib/aarch64-linux-gnu/libgpgme.so.11 \
@@ -332,8 +336,6 @@ yolov8_pi4: \
   /lib/aarch64-linux-gnu/libblkid.so.1 \
   /lib/aarch64-linux-gnu/libgraphite2.so.3 \
   /lib/aarch64-linux-gnu/libdatrie.so.1 \
-  /lib/aarch64-linux-gnu/libkeyutils.so.1 \
-  /lib/aarch64-linux-gnu/libresolv.so.2 \
   /lib/aarch64-linux-gnu/libabsl_graphcycles_internal.so.20240722 \
   /lib/aarch64-linux-gnu/libabsl_kernel_timeout_internal.so.20240722 \
   /lib/aarch64-linux-gnu/libabsl_stacktrace.so.20240722 \
@@ -368,6 +370,8 @@ yolov8_pi4: \
 /usr/lib/gcc/aarch64-linux-gnu/14/crtbeginS.o:
 
 CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o:
+
+CMakeFiles/yolov8_pi4.dir/Pi4RobotDriver.cpp.o:
 
 /home/pi4/ncnn_install/lib/libncnn.so:
 
@@ -443,7 +447,11 @@ CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o:
 
 /usr/lib/aarch64-linux-gnu/libopencv_xphoto.so.4.10.0:
 
+/usr/local/lib/libwiringPi.so:
+
 /usr/lib/gcc/aarch64-linux-gnu/14/../../../aarch64-linux-gnu/libpthread.a:
+
+/usr/lib/gcc/aarch64-linux-gnu/14/../../../aarch64-linux-gnu/libcurl.so:
 
 /usr/lib/aarch64-linux-gnu/libopencv_highgui.so.4.10.0:
 
@@ -541,6 +549,36 @@ CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o:
 
 /lib/aarch64-linux-gnu/libmvec.so.1:
 
+/lib/aarch64-linux-gnu/libnghttp3.so.9:
+
+/lib/aarch64-linux-gnu/libnghttp2.so.14:
+
+/lib/aarch64-linux-gnu/libidn2.so.0:
+
+/lib/aarch64-linux-gnu/librtmp.so.1:
+
+/lib/aarch64-linux-gnu/libssh2.so.1:
+
+/lib/aarch64-linux-gnu/libpsl.so.5:
+
+/lib/aarch64-linux-gnu/libssl.so.3:
+
+/lib/aarch64-linux-gnu/libcrypto.so.3:
+
+/lib/aarch64-linux-gnu/libgssapi_krb5.so.2:
+
+/lib/aarch64-linux-gnu/libldap.so.2:
+
+/lib/aarch64-linux-gnu/liblber.so.2:
+
+/lib/aarch64-linux-gnu/libzstd.so.1:
+
+/lib/aarch64-linux-gnu/libbrotlidec.so.1:
+
+/lib/aarch64-linux-gnu/libz.so.1:
+
+/lib/ld-linux-aarch64.so.1:
+
 /lib/aarch64-linux-gnu/libdc1394.so.25:
 
 /lib/aarch64-linux-gnu/libgstbase-1.0.so.0:
@@ -573,8 +611,6 @@ CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o:
 
 /lib/aarch64-linux-gnu/libgphoto2_port.so.12:
 
-/lib/ld-linux-aarch64.so.1:
-
 /lib/aarch64-linux-gnu/libjpeg.so.62:
 
 /lib/aarch64-linux-gnu/libwebp.so.7:
@@ -595,8 +631,6 @@ CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o:
 
 /lib/aarch64-linux-gnu/libprotobuf.so.32:
 
-/lib/aarch64-linux-gnu/libz.so.1:
-
 /lib/aarch64-linux-gnu/libGLX.so.0:
 
 /lib/aarch64-linux-gnu/liblapack.so.3:
@@ -604,6 +638,28 @@ CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o:
 /lib/aarch64-linux-gnu/libblas.so.3:
 
 /lib/aarch64-linux-gnu/libtbb.so.12:
+
+/lib/aarch64-linux-gnu/libunistring.so.5:
+
+/lib/aarch64-linux-gnu/libgnutls.so.30:
+
+/lib/aarch64-linux-gnu/libhogweed.so.6:
+
+/lib/aarch64-linux-gnu/libnettle.so.8:
+
+/lib/aarch64-linux-gnu/libgmp.so.10:
+
+/lib/aarch64-linux-gnu/libkrb5.so.3:
+
+/lib/aarch64-linux-gnu/libk5crypto.so.3:
+
+/lib/aarch64-linux-gnu/libcom_err.so.2:
+
+/lib/aarch64-linux-gnu/libkrb5support.so.0:
+
+/lib/aarch64-linux-gnu/libsasl2.so.2:
+
+/lib/aarch64-linux-gnu/libbrotlicommon.so.1:
 
 /lib/aarch64-linux-gnu/libraw1394.so.11:
 
@@ -697,8 +753,6 @@ CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o:
 
 /lib/aarch64-linux-gnu/libbluray.so.2:
 
-/lib/aarch64-linux-gnu/libgnutls.so.30:
-
 /lib/aarch64-linux-gnu/librabbitmq.so.4:
 
 /lib/aarch64-linux-gnu/librist.so.4:
@@ -745,8 +799,6 @@ CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o:
 
 /lib/aarch64-linux-gnu/libgdcmCommon.so.3.0:
 
-/lib/aarch64-linux-gnu/libzstd.so.1:
-
 /lib/aarch64-linux-gnu/libLerc.so.4:
 
 /lib/aarch64-linux-gnu/libjbig.so.0:
@@ -764,8 +816,6 @@ CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o:
 /lib/aarch64-linux-gnu/libodbc.so.2:
 
 /lib/aarch64-linux-gnu/libodbcinst.so.2:
-
-/lib/aarch64-linux-gnu/libcrypto.so.3:
 
 /lib/aarch64-linux-gnu/liblz4.so.1:
 
@@ -829,6 +879,14 @@ CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o:
 
 /lib/aarch64-linux-gnu/libgfortran.so.5:
 
+/lib/aarch64-linux-gnu/libp11-kit.so.0:
+
+/lib/aarch64-linux-gnu/libtasn1.so.6:
+
+/lib/aarch64-linux-gnu/libkeyutils.so.1:
+
+/lib/aarch64-linux-gnu/libresolv.so.2:
+
 /lib/aarch64-linux-gnu/libsoxr.so.0:
 
 /lib/aarch64-linux-gnu/libgio-2.0.so.0:
@@ -869,8 +927,6 @@ CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o:
 
 /lib/aarch64-linux-gnu/libhwy.so.1:
 
-/lib/aarch64-linux-gnu/libbrotlidec.so.1:
-
 /lib/aarch64-linux-gnu/libbrotlienc.so.1:
 
 /lib/aarch64-linux-gnu/libogg.so.0:
@@ -885,27 +941,9 @@ CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o:
 
 /lib/aarch64-linux-gnu/libudfread.so.0:
 
-/lib/aarch64-linux-gnu/libp11-kit.so.0:
-
-/lib/aarch64-linux-gnu/libidn2.so.0:
-
-/lib/aarch64-linux-gnu/libunistring.so.5:
-
-/lib/aarch64-linux-gnu/libtasn1.so.6:
-
-/lib/aarch64-linux-gnu/libhogweed.so.6:
-
-/lib/aarch64-linux-gnu/libnettle.so.8:
-
-/lib/aarch64-linux-gnu/libgmp.so.10:
-
-/lib/aarch64-linux-gnu/libssl.so.3:
-
 /lib/aarch64-linux-gnu/libmbedcrypto.so.16:
 
 /lib/aarch64-linux-gnu/libcjson.so.1:
-
-/lib/aarch64-linux-gnu/libgssapi_krb5.so.2:
 
 /lib/aarch64-linux-gnu/libbsd.so.0:
 
@@ -921,23 +959,9 @@ CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o:
 
 /lib/aarch64-linux-gnu/libxcb-dri3.so.0:
 
-/lib/aarch64-linux-gnu/libnghttp3.so.9:
-
 /lib/aarch64-linux-gnu/libngtcp2_crypto_gnutls.so.8:
 
 /lib/aarch64-linux-gnu/libngtcp2.so.16:
-
-/lib/aarch64-linux-gnu/libnghttp2.so.14:
-
-/lib/aarch64-linux-gnu/librtmp.so.1:
-
-/lib/aarch64-linux-gnu/libssh2.so.1:
-
-/lib/aarch64-linux-gnu/libpsl.so.5:
-
-/lib/aarch64-linux-gnu/libldap.so.2:
-
-/lib/aarch64-linux-gnu/liblber.so.2:
 
 /lib/aarch64-linux-gnu/libxxhash.so.0:
 
@@ -962,8 +986,6 @@ CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o:
 /lib/aarch64-linux-gnu/libnspr4.so:
 
 /lib/aarch64-linux-gnu/libhdf5_serial_hl.so.310:
-
-/lib/aarch64-linux-gnu/libcurl.so.4:
 
 /lib/aarch64-linux-gnu/libsz.so.2:
 
@@ -997,19 +1019,7 @@ CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o:
 
 /lib/aarch64-linux-gnu/libXdmcp.so.6:
 
-/lib/aarch64-linux-gnu/libbrotlicommon.so.1:
-
-/lib/aarch64-linux-gnu/libkrb5.so.3:
-
-/lib/aarch64-linux-gnu/libk5crypto.so.3:
-
-/lib/aarch64-linux-gnu/libcom_err.so.2:
-
-/lib/aarch64-linux-gnu/libkrb5support.so.0:
-
 /lib/aarch64-linux-gnu/libmd.so.0:
-
-/lib/aarch64-linux-gnu/libsasl2.so.2:
 
 /lib/aarch64-linux-gnu/libicudata.so.76:
 
@@ -1026,10 +1036,6 @@ CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o:
 /lib/aarch64-linux-gnu/libgraphite2.so.3:
 
 /lib/aarch64-linux-gnu/libdatrie.so.1:
-
-/lib/aarch64-linux-gnu/libkeyutils.so.1:
-
-/lib/aarch64-linux-gnu/libresolv.so.2:
 
 /lib/aarch64-linux-gnu/libabsl_graphcycles_internal.so.20240722:
 

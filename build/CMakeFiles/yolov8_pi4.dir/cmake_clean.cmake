@@ -1,5 +1,7 @@
 file(REMOVE_RECURSE
   "CMakeFiles/yolov8_pi4.dir/link.d"
+  "CMakeFiles/yolov8_pi4.dir/Pi4RobotDriver.cpp.o"
+  "CMakeFiles/yolov8_pi4.dir/Pi4RobotDriver.cpp.o.d"
   "CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o"
   "CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o.d"
   "yolov8_pi4"

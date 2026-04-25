@@ -8,6 +8,7 @@ set(CMAKE_DEPENDS_LANGUAGES
 
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
+  "/home/pi4/project/Pi4RobotDriver.cpp" "CMakeFiles/yolov8_pi4.dir/Pi4RobotDriver.cpp.o" "gcc" "CMakeFiles/yolov8_pi4.dir/Pi4RobotDriver.cpp.o.d"
   "/home/pi4/project/yolov8_ncnn_pi4.cpp" "CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o" "gcc" "CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o.d"
   "" "yolov8_pi4" "gcc" "CMakeFiles/yolov8_pi4.dir/link.d"
   )

@@ -63,11 +63,11 @@ CMAKE_BINARY_DIR = /home/pi4/project/build
 # Directory level rules for the build root directory
 
 # The main recursive "all" target.
-all: CMakeFiles/tenfile.dir/all
+all: CMakeFiles/yolov8_pi4.dir/all
 .PHONY : all
 
 # The main recursive "codegen" target.
-codegen: CMakeFiles/tenfile.dir/codegen
+codegen: CMakeFiles/yolov8_pi4.dir/codegen
 .PHONY : codegen
 
 # The main recursive "preinstall" target.
@@ -75,40 +75,40 @@ preinstall:
 .PHONY : preinstall
 
 # The main recursive "clean" target.
-clean: CMakeFiles/tenfile.dir/clean
+clean: CMakeFiles/yolov8_pi4.dir/clean
 .PHONY : clean
 
 #=============================================================================
-# Target rules for target CMakeFiles/tenfile.dir
+# Target rules for target CMakeFiles/yolov8_pi4.dir
 
 # All Build rule for target.
-CMakeFiles/tenfile.dir/all:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tenfile.dir/build.make CMakeFiles/tenfile.dir/depend
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tenfile.dir/build.make CMakeFiles/tenfile.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/pi4/project/build/CMakeFiles --progress-num=1,2 "Built target tenfile"
-.PHONY : CMakeFiles/tenfile.dir/all
+CMakeFiles/yolov8_pi4.dir/all:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/yolov8_pi4.dir/build.make CMakeFiles/yolov8_pi4.dir/depend
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/yolov8_pi4.dir/build.make CMakeFiles/yolov8_pi4.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/pi4/project/build/CMakeFiles --progress-num=1,2,3 "Built target yolov8_pi4"
+.PHONY : CMakeFiles/yolov8_pi4.dir/all
 
 # Build rule for subdir invocation for target.
-CMakeFiles/tenfile.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/pi4/project/build/CMakeFiles 2
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/tenfile.dir/all
+CMakeFiles/yolov8_pi4.dir/rule: cmake_check_build_system
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/pi4/project/build/CMakeFiles 3
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/yolov8_pi4.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/pi4/project/build/CMakeFiles 0
-.PHONY : CMakeFiles/tenfile.dir/rule
+.PHONY : CMakeFiles/yolov8_pi4.dir/rule
 
 # Convenience name for target.
-tenfile: CMakeFiles/tenfile.dir/rule
-.PHONY : tenfile
+yolov8_pi4: CMakeFiles/yolov8_pi4.dir/rule
+.PHONY : yolov8_pi4
 
 # codegen rule for target.
-CMakeFiles/tenfile.dir/codegen:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tenfile.dir/build.make CMakeFiles/tenfile.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/pi4/project/build/CMakeFiles --progress-num=1,2 "Finished codegen for target tenfile"
-.PHONY : CMakeFiles/tenfile.dir/codegen
+CMakeFiles/yolov8_pi4.dir/codegen:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/yolov8_pi4.dir/build.make CMakeFiles/yolov8_pi4.dir/codegen
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/pi4/project/build/CMakeFiles --progress-num=1,2,3 "Finished codegen for target yolov8_pi4"
+.PHONY : CMakeFiles/yolov8_pi4.dir/codegen
 
 # clean rule for target.
-CMakeFiles/tenfile.dir/clean:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tenfile.dir/build.make CMakeFiles/tenfile.dir/clean
-.PHONY : CMakeFiles/tenfile.dir/clean
+CMakeFiles/yolov8_pi4.dir/clean:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/yolov8_pi4.dir/build.make CMakeFiles/yolov8_pi4.dir/clean
+.PHONY : CMakeFiles/yolov8_pi4.dir/clean
 
 #=============================================================================
 # Special targets to cleanup operation of make.

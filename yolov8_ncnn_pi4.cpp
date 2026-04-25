@@ -1,4 +1,21 @@
+/*
+ * ═══════════════════════════════════════════════════════════════════════════
+ *  main_integrated.cpp
+ *  Tích hợp:
+ *    - test.cpp   : YOLOv8 NCNN inference, MJPEG stream, JSON stream
+ *    - pi4v2.cpp  : Firebase Realtime DB, RobotDriver (UART → ESP32)
+ *
+ *  Luồng hoạt động:
+ *    Camera → YOLO → Detection → RobotDriver (UART/ESP32)
+ *                             → Firebase (counts, daily_counts)
+ *                             → MJPEG stream (port 8080)
+ *                             → JSON  stream (port 8081)
+ *    Firebase → Pi4 (status, RobotControl) → RobotDriver
+ * ═══════════════════════════════════════════════════════════════════════════
+ */
 
+// ── Standard / System ────────────────────────────────────────────────────────
+#include <termios.h>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -11,7 +28,12 @@
 #include <mutex>
 #include <thread>
 #include <condition_variable>
+#include <ctime>
+#include <iomanip>
+#include <sstream>
+#include <map>
 
+// ── Network ──────────────────────────────────────────────────────────────────
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -21,23 +43,55 @@
 #include <unistd.h>
 #include <signal.h>
 
-#include "net.h"
+// ── Third-party ───────────────────────────────────────────────────────────────
+#include "net.h"                    // ncnn
 #include <opencv2/opencv.hpp>
+#include <curl/curl.h>
+#include <nlohmann/json.hpp>
 
-// ═══════════════════════════════ CẤU HÌNH ════════════════════════════════════
+// ── Project ───────────────────────────────────────────────────────────────────
+#include "Pi4RobotDriver.h"         // RobotDriver, ProductID, SystemMode
+
+using json = nlohmann::json;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  CẤU HÌNH FIREBASE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+static const std::string DB_URL    = "https://canhtayrobot-c4c37-default-rtdb.asia-southeast1.firebasedatabase.app";
+static const std::string DB_SECRET = "Wwz72xGhJAsO9EO2GSvWHC053GsCXIvRmbDbDKLw";
+
+// Ánh xạ ProductID ↔ tên key Firebase
+static std::map<ProductID, std::string> productNames = {
+    {ProductID::HINH_TRU_DO,      "HinhTru_Do"},
+    {ProductID::LAP_PHUONG_DO,    "LapPhuong_Do"},
+    {ProductID::HINH_TRU_XANH,   "HinhTru_Xanh"},
+    {ProductID::LAP_PHUONG_XANH, "LapPhuong_Xanh"},
+    {ProductID::HINH_TRU_VANG,   "HinhTru_Vang"},
+    {ProductID::LAP_PHUONG_VANG, "LapPhuong_Vang"}
+};
+
+// Ánh xạ servo key Firebase → channel ESP32
+static std::map<std::string, uint8_t> servoChannels = {
+    {"base", 0}, {"shoulder", 3}, {"elbow", 8}, {"gripper", 15}
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  CẤU HÌNH CAMERA & MODEL
+// ═══════════════════════════════════════════════════════════════════════════════
 
 static const std::string PARAM_PATH = "best_ncnn_model/model.ncnn.param";
 static const std::string BIN_PATH   = "best_ncnn_model/model.ncnn.bin";
 static const char* INPUT_LAYER      = "in0";
 static const char* OUTPUT_LAYER     = "out0";
 
-static const int CAM_W    = 640;
-static const int CAM_H    = 360;
+static const int CAM_W = 640;
+static const int CAM_H = 360;
 
-static const int ROI_W  = 300;
+static const int ROI_W  = 180;
 static const int ROI_H  = 200;
-static const int ROI_X0 = (CAM_W - ROI_W) / 2;
-static const int ROI_Y0 = (CAM_H - ROI_H) / 2;
+static const int ROI_X0 = ((CAM_W - ROI_W) / 2)-30;
+static const int ROI_Y0 = ((CAM_H - ROI_H) / 2);
 
 static const int NET_SIZE = 320;
 
@@ -46,6 +100,56 @@ static int   LB_PAD_X = 0;
 static int   LB_PAD_Y = 0;
 static int   LB_NW    = 0;
 static int   LB_NH    = 0;
+
+static const int   NUM_CLASSES = 8;
+static const float CONF_THRESH = 0.8f;
+static const float NMS_THRESH  = 0.45f;
+static const int   SKIP_FRAMES = 1;
+
+static const std::vector<std::string> CLASS_NAMES = {
+    "Background",
+    "LapPhuong_Do",
+    "LapPhuong_Vang",
+    "LapPhuong_Xanh",
+    "HinhTru_Do",
+    "HinhTru_Vang",
+    "HinhTru_Xanh",
+    "SP_loi"
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  STRUCT
+// ═══════════════════════════════════════════════════════════════════════════════
+
+struct Detection {
+    int   class_id;
+    float conf;
+    int   x, y, w, h;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SHARED STATE (camera ↔ MJPEG/JSON threads)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+struct SharedState {
+    // MJPEG
+    std::mutex              frame_mtx;
+    std::condition_variable frame_cv;
+    std::vector<uchar>      jpeg_data;
+    uint64_t                frame_seq = 0;
+
+    // JSON / detections
+    std::mutex              det_mtx;
+    std::vector<Detection>  dets;
+    float                   fps_infer  = 0.f;
+    int                     frame_count = 0;
+
+    std::atomic<bool>       running{true};
+} g_state;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  LETTERBOX INIT
+// ═══════════════════════════════════════════════════════════════════════════════
 
 void init_letterbox()
 {
@@ -63,53 +167,9 @@ void init_letterbox()
               << " pad=(" << LB_PAD_X << "," << LB_PAD_Y << ")\n";
 }
 
-static const int   NUM_CLASSES  = 8;
-static const float CONF_THRESH  = 0.8f;
-static const float NMS_THRESH   = 0.45f;
-static const int   SKIP_FRAMES  = 1;
-
-static const std::vector<std::string> CLASS_NAMES = {
-    "Background",
-    "LapPhuong_Do",
-    "LapPhuong_Vang",
-    "LapPhuong_Xanh",
-    "HinhTru_Do",
-    "HinhTru_Vang",
-    "HinhTru_Xanh",
-    "SP_loi"
-};
-
-// ═══════════════════════════════ STRUCT ══════════════════════════════════════
-
-struct Detection {
-    int   class_id;
-    float conf;
-    int   x, y, w, h;
-};
-
-// ════════════════════ SHARED FRAME BUFFER (thread-safe) ═══════════════════════
-//
-// FIX CORE: Thay vì send() trực tiếp trong vòng lặp camera,
-// ta lưu frame JPEG vào buffer chung. Thread MJPEG/JSON đọc ra và gửi
-// độc lập. Camera không bao giờ bị block bởi network.
-
-struct SharedState {
-    // MJPEG
-    std::mutex              frame_mtx;
-    std::condition_variable frame_cv;
-    std::vector<uchar>      jpeg_data;   // frame JPEG mới nhất
-    uint64_t                frame_seq = 0; // tăng mỗi khi có frame mới
-
-    // JSON / detections
-    std::mutex              det_mtx;
-    std::vector<Detection>  dets;
-    float                   fps_infer = 0.f;
-    int                     frame_count = 0;
-
-    std::atomic<bool>       running{true};
-} g_state;
-
-// ═══════════════════════════════ COLOR CHECK ══════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+//  COLOR CHECK
+// ═══════════════════════════════════════════════════════════════════════════════
 
 bool is_valid_color(const cv::Mat& frame, const Detection& d,
                     const std::string& class_name)
@@ -138,7 +198,9 @@ bool is_valid_color(const cv::Mat& frame, const Detection& d,
     return true;
 }
 
-// ═══════════════════════════════ TIỀN XỬ LÝ ══════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+//  TIỀN XỬ LÝ ẢNH
+// ═══════════════════════════════════════════════════════════════════════════════
 
 ncnn::Mat preprocess(const cv::Mat& frame)
 {
@@ -160,7 +222,9 @@ ncnn::Mat preprocess(const cv::Mat& frame)
     return in;
 }
 
-// ═══════════════════════════════ GIẢI MÃ ĐẦU RA ═══════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+//  GIẢI MÃ ĐẦU RA YOLO
+// ═══════════════════════════════════════════════════════════════════════════════
 
 std::vector<Detection> decode_output(const ncnn::Mat& out)
 {
@@ -224,7 +288,195 @@ std::vector<Detection> decode_output(const ncnn::Mat& out)
     return result;
 }
 
-// ═══════════════════════════════ JSON BUILDER ═════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+//  ÁNH XẠ class_id → ProductID cho RobotDriver
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// CLASS_NAMES: 0=Background,1=LapPhuong_Do,2=LapPhuong_Vang,3=LapPhuong_Xanh
+//              4=HinhTru_Do,5=HinhTru_Vang,6=HinhTru_Xanh,7=SP_loi
+static const std::map<int, ProductID> classIdToProductID = {
+    {1, ProductID::LAP_PHUONG_DO},
+    {2, ProductID::LAP_PHUONG_VANG},
+    {3, ProductID::LAP_PHUONG_XANH},
+    {4, ProductID::HINH_TRU_DO},
+    {5, ProductID::HINH_TRU_VANG},
+    {6, ProductID::HINH_TRU_XANH}
+    // 0=Background, 7=SP_loi → không gửi
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  FIREBASE – HTTP HELPER
+// ═══════════════════════════════════════════════════════════════════════════════
+
+static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
+    ((std::string*)userp)->append((char*)contents, size * nmemb);
+    return size * nmemb;
+}
+
+// Đồng bộ counts từ Firebase → ESP32 lúc khởi động
+void syncInitialCounts(RobotDriver& robot)
+{
+    std::cout << "[SYNC] Đang tải dữ liệu counts từ Firebase...\n";
+    std::string url = DB_URL + "/counts.json?auth=" + DB_SECRET;
+
+    CURL* curl = curl_easy_init();
+    if (curl) {
+        std::string buf;
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
+        CURLcode res = curl_easy_perform(curl);
+        if (res == CURLE_OK && buf != "null") {
+            try {
+                json j = json::parse(buf);
+                for (const auto& [key, val] : j.items()) {
+                    for (const auto& [pid, name] : productNames) {
+                        if (name == key) {
+                            uint16_t countVal = val.get<uint16_t>();
+                            std::cout << "  -> Đồng bộ " << name << ": " << countVal << "\n";
+                            robot.setInitialCount(pid, countVal);
+                            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                            break;
+                        }
+                    }
+                }
+                std::cout << "[SYNC] Hoàn tất đồng bộ dữ liệu xuống ESP32.\n";
+            } catch (...) { std::cerr << "[SYNC ERR] Lỗi Parse JSON.\n"; }
+        }
+        curl_easy_cleanup(curl);
+    }
+}
+
+// Cập nhật counts lên Firebase (tổng + daily)
+void updateFirebaseCountDB(ProductID pid, int currentCount)
+{
+    std::string pName = productNames[pid];
+
+    auto t  = std::time(nullptr);
+    auto tm = *std::localtime(&t);
+    std::ostringstream oss;
+    oss << std::put_time(&tm, "%Y-%m-%d");
+    std::string todayDate = oss.str();
+
+    json patchData;
+    patchData[pName] = currentCount;
+    std::string payload = patchData.dump();
+
+    CURL* curl = curl_easy_init();
+    if (curl) {
+        struct curl_slist* headers = nullptr;
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+
+        // /counts
+        std::string urlCounts = DB_URL + "/counts.json?auth=" + DB_SECRET;
+        curl_easy_setopt(curl, CURLOPT_URL, urlCounts.c_str());
+        curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PATCH");
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, payload.c_str());
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        curl_easy_perform(curl);
+
+        // /daily_counts/<date>
+        std::string urlDaily = DB_URL + "/daily_counts/" + todayDate + ".json?auth=" + DB_SECRET;
+        curl_easy_setopt(curl, CURLOPT_URL, urlDaily.c_str());
+        curl_easy_perform(curl);
+
+        std::cout << "[FIREBASE] Đã cập nhật " << pName << " = " << currentCount << "\n";
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  FIREBASE STREAM CALLBACKS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+static size_t StatusStreamCallback(char* ptr, size_t size, size_t nmemb, void* userdata)
+{
+    size_t realSize = size * nmemb;
+    std::string chunk(ptr, realSize);
+    RobotDriver* robot = static_cast<RobotDriver*>(userdata);
+
+    size_t dataPos = chunk.find("data: ");
+    if (dataPos != std::string::npos) {
+        try {
+            std::string jsonData = chunk.substr(dataPos + 6);
+            if (jsonData.find("null") == 0) return realSize;
+            json j = json::parse(jsonData);
+            std::string path = j["path"];
+            json data = j["data"];
+
+            if (path == "/") {
+                if (data.contains("start")) robot->setStart(data["start"]);
+                if (data.contains("home"))  robot->setHome(data["home"]);
+            } else if (path == "/start") {
+                robot->setStart(data.get<bool>());
+            } else if (path == "/home") {
+                robot->setHome(data.get<bool>());
+            }
+        } catch (...) {}
+    }
+    return realSize;
+}
+
+static size_t ControlStreamCallback(char* ptr, size_t size, size_t nmemb, void* userdata)
+{
+    size_t realSize = size * nmemb;
+    std::string chunk(ptr, realSize);
+    RobotDriver* robot = static_cast<RobotDriver*>(userdata);
+
+    size_t dataPos = chunk.find("data: ");
+    if (dataPos != std::string::npos) {
+        try {
+            std::string jsonData = chunk.substr(dataPos + 6);
+            if (jsonData.find("null") == 0) return realSize;
+            json j = json::parse(jsonData);
+            std::string path = j["path"];
+            json data = j["data"];
+
+            if (path == "/") {
+                if (data.contains("mode"))
+                    robot->setMode(data["mode"] == "manual" ? SystemMode::MANUAL : SystemMode::AUTO);
+                if (data.contains("conveyor"))
+                    robot->setConveyor(data["conveyor"]);
+                for (auto const& [key, ch] : servoChannels) {
+                    if (data.contains(key)) robot->setServo(ch, data[key]);
+                }
+            } else {
+                std::string key = path.substr(1);
+                if      (key == "mode")
+                    robot->setMode(data == "manual" ? SystemMode::MANUAL : SystemMode::AUTO);
+                else if (key == "conveyor")
+                    robot->setConveyor(data);
+                else if (servoChannels.count(key))
+                    robot->setServo(servoChannels[key], data);
+            }
+        } catch (...) {}
+    }
+    return realSize;
+}
+
+void listenToFirebaseStream(const std::string& node, size_t (*cb)(char*, size_t, size_t, void*),
+                            RobotDriver* robot)
+{
+    std::string url = DB_URL + node + ".json?auth=" + DB_SECRET;
+    CURL* curl = curl_easy_init();
+    if (curl) {
+        struct curl_slist* headers = nullptr;
+        headers = curl_slist_append(headers, "Accept: text/event-stream");
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, cb);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, robot);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 0L);
+        curl_easy_perform(curl);
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  JSON BUILDER
+// ═══════════════════════════════════════════════════════════════════════════════
 
 int make_json(char* buf, int bufsz, float fps_infer, int frame_count,
               const std::vector<Detection>& dets)
@@ -240,12 +492,16 @@ int make_json(char* buf, int bufsz, float fps_infer, int frame_count,
 
     for (int i = 0; i < (int)dets.size(); i++) {
         const auto& d = dets[i];
+        const char* name = "";
+        if (d.class_id > 0 && d.class_id < (int)CLASS_NAMES.size()) {
+            if (CLASS_NAMES[d.class_id] != "SP_loi")
+                name = CLASS_NAMES[d.class_id].c_str();
+        }
         n += std::snprintf(buf + n, bufsz - n,
             "%s{\"cls\":%d,\"name\":\"%s\","
             "\"conf\":%d,\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d}",
             i ? "," : "",
-            d.class_id,
-            (d.class_id < NUM_CLASSES ? CLASS_NAMES[d.class_id].c_str() : "?"),
+            d.class_id, name,
             (int)(d.conf * 100),
             d.x, d.y, d.w, d.h);
     }
@@ -253,14 +509,16 @@ int make_json(char* buf, int bufsz, float fps_infer, int frame_count,
     return n;
 }
 
-// ═══════════════════════════════ SOCKET HELPER ═══════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SOCKET HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
 
 int make_server(int port)
 {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    int fd  = socket(AF_INET, SOCK_STREAM, 0);
     int opt = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    int sndbuf = 2 * 1024 * 1024;  // 2MB
+    int sndbuf = 2 * 1024 * 1024;
     setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
 
     struct sockaddr_in addr{};
@@ -269,28 +527,21 @@ int make_server(int port)
     addr.sin_port        = htons(port);
     if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         std::cerr << "[ERROR] bind port " << port << " thất bại\n";
-        close(fd);
-        return -1;
+        close(fd); return -1;
     }
-    listen(fd, 4);  // FIX: backlog=4 để không từ chối reconnect
+    listen(fd, 4);
     fcntl(fd, F_SETFL, O_NONBLOCK);
     return fd;
 }
 
-// Gửi dữ liệu non-blocking với timeout – KHÔNG block vòng lặp camera
-// Trả về false nếu client ngắt hoặc timeout
 bool send_all_nb(int sock, const char* data, size_t len)
 {
     size_t total = 0;
     while (total < len) {
-        // Dùng select với timeout 200ms để không block mãi mãi
-        fd_set wfds;
-        FD_ZERO(&wfds);
-        FD_SET(sock, &wfds);
-        struct timeval tv = {0, 200000};  // 200ms timeout
+        fd_set wfds; FD_ZERO(&wfds); FD_SET(sock, &wfds);
+        struct timeval tv = {0, 200000};
         int sel = select(sock + 1, nullptr, &wfds, nullptr, &tv);
-        if (sel <= 0) return false;  // timeout hoặc lỗi
-
+        if (sel <= 0) return false;
         ssize_t sent = send(sock, data + total, len - total, MSG_NOSIGNAL);
         if (sent <= 0) return false;
         total += sent;
@@ -298,32 +549,20 @@ bool send_all_nb(int sock, const char* data, size_t len)
     return true;
 }
 
-// ═══════════════════════════════ MJPEG SERVER THREAD ════════════════════════
-//
-// FIX CORE: Thread này xử lý toàn bộ MJPEG, hoàn toàn độc lập với camera.
-// Mỗi client có 1 thread riêng → hỗ trợ nhiều viewer cùng lúc.
-// Camera thread KHÔNG BAO GIỜ bị block bởi mạng chậm.
+// ═══════════════════════════════════════════════════════════════════════════════
+//  MJPEG CLIENT THREAD
+// ═══════════════════════════════════════════════════════════════════════════════
 
 void mjpeg_client_thread(int cli_fd)
 {
-    // Đặt SO_SNDBUF và TCP_NODELAY cho client này
     int nodelay = 1, sndbuf = 1024 * 1024;
     setsockopt(cli_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
-    setsockopt(cli_fd, SOL_SOCKET, SO_SNDBUF,   &sndbuf,  sizeof(sndbuf));
-
-    // Đặt non-blocking socket để send_all_nb hoạt động đúng
+    setsockopt(cli_fd, SOL_SOCKET,  SO_SNDBUF,   &sndbuf,  sizeof(sndbuf));
     int flags = fcntl(cli_fd, F_GETFL, 0);
     fcntl(cli_fd, F_SETFL, flags | O_NONBLOCK);
 
-    // Đọc HTTP request (bỏ qua nội dung, chỉ cần drain buffer)
-    {
-        char req[1024] = {};
-        recv(cli_fd, req, sizeof(req)-1, MSG_DONTWAIT);
-    }
+    { char req[1024] = {}; recv(cli_fd, req, sizeof(req)-1, MSG_DONTWAIT); }
 
-    // FIX: Gửi HTTP header chuẩn RFC 2046 multipart
-    // boundary KHÔNG có "--" prefix ở Content-Type header
-    // Mỗi part bắt đầu bằng "--BOUNDARY\r\n"
     static const char* HTTP_HDR =
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: multipart/x-mixed-replace; boundary=jpgboundary\r\n"
@@ -333,35 +572,23 @@ void mjpeg_client_thread(int cli_fd)
         "Connection: close\r\n"
         "\r\n";
 
-    if (!send_all_nb(cli_fd, HTTP_HDR, strlen(HTTP_HDR))) {
-        close(cli_fd);
-        return;
-    }
+    if (!send_all_nb(cli_fd, HTTP_HDR, strlen(HTTP_HDR))) { close(cli_fd); return; }
     std::cout << "[MJPEG] client kết nối fd=" << cli_fd << "\n";
 
-    uint64_t last_seq = 0;
+    uint64_t           last_seq = 0;
     std::vector<uchar> local_jpeg;
 
     while (g_state.running.load()) {
-        // Chờ frame mới (có timeout để kiểm tra g_state.running)
         {
             std::unique_lock<std::mutex> lk(g_state.frame_mtx);
             bool got = g_state.frame_cv.wait_for(lk,
                 std::chrono::milliseconds(500),
                 [&]{ return g_state.frame_seq != last_seq; });
-            if (!got) continue;  // timeout → thử lại
-
+            if (!got) continue;
             last_seq   = g_state.frame_seq;
-            local_jpeg = g_state.jpeg_data;  // copy nhanh (vector assignment)
+            local_jpeg = g_state.jpeg_data;
         }
 
-        // FIX: Format đúng chuẩn MJPEG multipart
-        // "--boundary\r\n"
-        // "Content-Type: image/jpeg\r\n"
-        // "Content-Length: <N>\r\n"
-        // "\r\n"
-        // <JPEG bytes>
-        // "\r\n"
         char part_hdr[128];
         int hlen = std::snprintf(part_hdr, sizeof(part_hdr),
             "--jpgboundary\r\n"
@@ -374,15 +601,16 @@ void mjpeg_client_thread(int cli_fd)
             send_all_nb(cli_fd, part_hdr, hlen) &&
             send_all_nb(cli_fd, (char*)local_jpeg.data(), local_jpeg.size()) &&
             send_all_nb(cli_fd, "\r\n", 2);
-
-        if (!ok) break;  // client ngắt
+        if (!ok) break;
     }
 
     std::cout << "[MJPEG] client ngắt fd=" << cli_fd << "\n";
     close(cli_fd);
 }
 
-// ═══════════════════════════════ JSON SERVER THREAD ═════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+//  JSON CLIENT THREAD
+// ═══════════════════════════════════════════════════════════════════════════════
 
 void json_client_thread(int cli_fd)
 {
@@ -391,10 +619,7 @@ void json_client_thread(int cli_fd)
     int flags = fcntl(cli_fd, F_GETFL, 0);
     fcntl(cli_fd, F_SETFL, flags | O_NONBLOCK);
 
-    {
-        char req[1024] = {};
-        recv(cli_fd, req, sizeof(req)-1, MSG_DONTWAIT);
-    }
+    { char req[1024] = {}; recv(cli_fd, req, sizeof(req)-1, MSG_DONTWAIT); }
 
     static const char* JSON_HDR =
         "HTTP/1.1 200 OK\r\n"
@@ -405,26 +630,19 @@ void json_client_thread(int cli_fd)
         "Connection: keep-alive\r\n"
         "\r\n";
 
-    if (!send_all_nb(cli_fd, JSON_HDR, strlen(JSON_HDR))) {
-        close(cli_fd); return;
-    }
+    if (!send_all_nb(cli_fd, JSON_HDR, strlen(JSON_HDR))) { close(cli_fd); return; }
     std::cout << "[JSON] client kết nối fd=" << cli_fd << "\n";
 
-    // Gửi JSON mỗi khi có inference mới
-    // Dùng polling nhẹ thay vì condition_variable để tránh missed signal
     int last_frame = -1;
-
     while (g_state.running.load()) {
         std::vector<Detection> dets;
-        float fps_infer;
-        int   frame_count;
+        float fps_infer; int frame_count;
         {
             std::lock_guard<std::mutex> lk(g_state.det_mtx);
             frame_count = g_state.frame_count;
             fps_infer   = g_state.fps_infer;
             dets        = g_state.dets;
         }
-
         if (frame_count == last_frame) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             continue;
@@ -441,7 +659,6 @@ void json_client_thread(int cli_fd)
             send_all_nb(cli_fd, chunk_hdr, hlen) &&
             send_all_nb(cli_fd, js_buf,    js_len) &&
             send_all_nb(cli_fd, "\r\n",    2);
-
         if (!ok) break;
     }
 
@@ -449,7 +666,9 @@ void json_client_thread(int cli_fd)
     close(cli_fd);
 }
 
-// ═══════════════════════════════ ACCEPT LOOP THREAD ══════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+//  ACCEPT LOOP THREAD
+// ═══════════════════════════════════════════════════════════════════════════════
 
 void accept_loop(int srv_fd, bool is_mjpeg)
 {
@@ -466,8 +685,6 @@ void accept_loop(int srv_fd, bool is_mjpeg)
             if (!g_state.running.load()) break;
             continue;
         }
-
-        // Spawn thread per client
         if (is_mjpeg)
             std::thread(mjpeg_client_thread, cli).detach();
         else
@@ -475,11 +692,13 @@ void accept_loop(int srv_fd, bool is_mjpeg)
     }
 }
 
-// ═══════════════════════════════ MAIN ════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+//  MAIN
+// ═══════════════════════════════════════════════════════════════════════════════
 
 int main(int argc, char* argv[])
 {
-    signal(SIGPIPE, SIG_IGN);  // FIX: bỏ qua SIGPIPE khi client ngắt
+    signal(SIGPIPE, SIG_IGN);
 
     std::string video_path;
     int mjpeg_port = 8080;
@@ -489,14 +708,41 @@ int main(int argc, char* argv[])
         if      (a == "--video" && i+1 < argc) video_path = argv[++i];
         else if (a == "--port"  && i+1 < argc) mjpeg_port = std::stoi(argv[++i]);
         else if (a == "--help") {
-            std::cout << "YOLOv8 NCNN Pi4\n\n"
-                      << "  ./yolov8_pi4 [--port 8080] [--video <path>]\n";
+            std::cout << "YOLOv8 NCNN + Firebase + RobotDriver\n\n"
+                      << "  ./robot [--port 8080] [--video <path>]\n";
             return 0;
         }
     }
     int json_port = mjpeg_port + 1;
 
-    // ── Load model ────────────────────────────────────────────────────────────
+    std::cout << "--- KHOI DONG HE THONG ---\n";
+
+    // ── 1. Khởi tạo RobotDriver (thay thế uart_init cũ) ─────────────────────
+    RobotDriver robot("/dev/ttyS0", 115200);
+    if (!robot.isOpen()) {
+        std::cerr << "[ERR] Không thể mở UART / RobotDriver.\n";
+        return -1;
+    }
+
+    // ── 2. Khởi tạo libcurl ──────────────────────────────────────────────────
+    curl_global_init(CURL_GLOBAL_ALL);
+
+    // ── 3. Đồng bộ counts Firebase → ESP32 ──────────────────────────────────
+    syncInitialCounts(robot);
+
+    // ── 4. Cài đặt callbacks nhận từ ESP32 ──────────────────────────────────
+    robot.onSensor = [](bool detected) {
+        if (detected)
+            std::cout << "[MAIN] Phát hiện vật phẩm! Chuẩn bị phân loại...\n";
+    };
+
+    robot.onCount = [](ProductID pid, int count) {
+        std::cout << "[EVENT] Sản phẩm mới! Tổng số hiện tại: " << count << "\n";
+        // Đẩy lên Firebase trên thread riêng để không block camera
+        std::thread(updateFirebaseCountDB, pid, count).detach();
+    };
+
+    // ── 5. Load model NCNN ───────────────────────────────────────────────────
     ncnn::Net net;
     net.opt.use_vulkan_compute = false;
     net.opt.num_threads        = 4;
@@ -504,25 +750,27 @@ int main(int argc, char* argv[])
         std::cerr << "[ERROR] load param\n"; return -1;
     }
     if (net.load_model(BIN_PATH.c_str()) != 0) {
-        std::cerr << "[ERROR] load bin\n";   return -1;
+        std::cerr << "[ERROR] load bin\n"; return -1;
     }
     std::cout << "[INFO] Model OK\n";
     init_letterbox();
 
-    // ── Mở camera ─────────────────────────────────────────────────────────────
+    // ── 6. Mở camera ────────────────────────────────────────────────────────
     cv::VideoCapture cap;
     if (video_path.empty()) {
         std::string gst =
-            "libcamerasrc ! "
-            "video/x-raw,width=" + std::to_string(CAM_W) +
+            "v4l2src device=/dev/video0 ! "
+            "image/jpeg,width=" + std::to_string(CAM_W) +
             ",height=" + std::to_string(CAM_H) +
-            ",framerate=10/1,format=NV12 ! "
-            "videoconvert ! video/x-raw,format=BGR ! "
-            "appsink drop=true max-buffers=2 sync=false";
+            ",framerate=10/1 ! "
+            "jpegdec ! videoconvert ! "
+            "video/x-raw,format=BGR ! "
+            "appsink drop=true max-buffers=1 sync=false";
         cap.open(gst, cv::CAP_GSTREAMER);
+
         if (!cap.isOpened()) {
-            std::cout << "[WARN] GStreamer thất bại, thử V4L2...\n";
-            cap.open(0, cv::CAP_V4L2);
+            std::cout << "[WARN] GStreamer lỗi → chuyển sang V4L2\n";
+            cap.open("/dev/video0", cv::CAP_V4L2);
             if (cap.isOpened()) {
                 cap.set(cv::CAP_PROP_FRAME_WIDTH,  CAM_W);
                 cap.set(cv::CAP_PROP_FRAME_HEIGHT, CAM_H);
@@ -538,10 +786,11 @@ int main(int argc, char* argv[])
     }
 
     if (!cap.isOpened()) {
-        std::cerr << "[ERROR] Không mở được camera.\n"; return -1;
+        std::cerr << "[ERROR] Không mở được camera.\n";
+        return -1;
     }
 
-    // ── TCP servers ───────────────────────────────────────────────────────────
+    // ── 7. TCP servers ───────────────────────────────────────────────────────
     int mjpeg_srv = make_server(mjpeg_port);
     int json_srv  = make_server(json_port);
     if (mjpeg_srv < 0 || json_srv < 0) return -1;
@@ -568,17 +817,26 @@ int main(int argc, char* argv[])
         << "╚══════════════════════════════════════════════╝\n\n"
         << "[INFO] Chờ kết nối... Ctrl+C để dừng.\n";
 
-    // ── Khởi động accept threads ──────────────────────────────────────────────
+    // ── 8. Luồng lắng nghe Firebase (status + RobotControl) ─────────────────
+    std::thread tStatus([&robot]{
+        listenToFirebaseStream("/status", StatusStreamCallback, &robot);
+    });
+    std::thread tControl([&robot]{
+        listenToFirebaseStream("/RobotControl", ControlStreamCallback, &robot);
+    });
+    tStatus.detach();
+    tControl.detach();
+
+    // ── 9. Accept threads cho MJPEG / JSON ───────────────────────────────────
     std::thread mjpeg_accept(accept_loop, mjpeg_srv, true);
     std::thread json_accept (accept_loop, json_srv,  false);
     mjpeg_accept.detach();
     json_accept.detach();
 
-    // ── Vòng lặp camera chính (KHÔNG bao giờ bị block bởi network) ───────────
+    // ── 10. Vòng lặp camera chính ────────────────────────────────────────────
     cv::Mat frame;
     int frame_count = 0;
     std::vector<Detection> last_dets;
-
     float fps_infer = 0.f;
     auto  t_infer   = std::chrono::steady_clock::now();
 
@@ -593,6 +851,7 @@ int main(int argc, char* argv[])
         bool do_infer = (frame_count % SKIP_FRAMES == 0);
 
         if (do_infer) {
+            // ── Inference ────────────────────────────────────────────────────
             ncnn::Mat in = preprocess(frame);
             ncnn::Extractor ex = net.create_extractor();
             ex.input(INPUT_LAYER, in);
@@ -601,35 +860,52 @@ int main(int argc, char* argv[])
 
             last_dets = decode_output(out);
 
+            // ── Lọc màu ──────────────────────────────────────────────────────
+            std::vector<Detection> filtered;
             for (auto& d : last_dets) {
                 if (d.class_id == 0) continue;
-                if (!is_valid_color(frame, d, CLASS_NAMES[d.class_id]))
-                    d.class_id = 7;
+                if (!is_valid_color(frame, d, CLASS_NAMES[d.class_id])) continue;
+                filtered.push_back(d);
             }
+            last_dets = filtered;
 
+            // ── FPS ───────────────────────────────────────────────────────────
             auto  t_now = std::chrono::steady_clock::now();
             float dt    = std::chrono::duration<float>(t_now - t_infer).count();
             t_infer     = t_now;
             fps_infer   = fps_infer * 0.9f + (1.f / (dt + 1e-9f)) * 0.1f;
 
-            // Cập nhật JSON state
+            // ── Cập nhật JSON state ───────────────────────────────────────────
             {
                 std::lock_guard<std::mutex> lk(g_state.det_mtx);
                 g_state.dets        = last_dets;
                 g_state.fps_infer   = fps_infer;
                 g_state.frame_count = frame_count;
             }
+
+            // ── Gửi detection tốt nhất xuống ESP32 qua RobotDriver ───────────
+            //    (thay thế uart_send() cũ – dùng notifyDetection của Driver)
+            if (!last_dets.empty()) {
+                const Detection& best = *std::max_element(
+                    last_dets.begin(), last_dets.end(),
+                    [](const Detection& a, const Detection& b){ return a.conf < b.conf; });
+
+                auto it = classIdToProductID.find(best.class_id);
+                if (it != classIdToProductID.end()) {
+                    robot.classify(it->second);
+                }
+            }
+            // Không có detection → không gọi classify
         }
 
-        // FIX CORE: Encode JPEG một lần, đặt vào shared buffer
-        // Tất cả MJPEG client threads sẽ tự lấy ra gửi đi
+        // ── Encode JPEG và cập nhật shared buffer ────────────────────────────
         cv::imencode(".jpg", frame, jpeg_buf, jpeg_params);
         {
             std::lock_guard<std::mutex> lk(g_state.frame_mtx);
             g_state.jpeg_data = jpeg_buf;
             g_state.frame_seq++;
         }
-        g_state.frame_cv.notify_all();  // đánh thức tất cả client threads
+        g_state.frame_cv.notify_all();
 
         frame_count++;
 
@@ -641,12 +917,15 @@ int main(int argc, char* argv[])
         }
     }
 
+    // ── Cleanup ───────────────────────────────────────────────────────────────
     g_state.running = false;
     g_state.frame_cv.notify_all();
 
     cap.release();
     close(mjpeg_srv);
     close(json_srv);
+    curl_global_cleanup();
+
     std::cout << "[INFO] Done. Frame: " << frame_count << "\n";
     return 0;
 }

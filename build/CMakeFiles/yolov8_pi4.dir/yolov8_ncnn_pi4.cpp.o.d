@@ -1,15 +1,30 @@
 CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o: \
  /home/pi4/project/yolov8_ncnn_pi4.cpp /usr/include/stdc-predef.h \
- /usr/include/c++/14/iostream /usr/include/c++/14/bits/requires_hosted.h \
- /usr/include/aarch64-linux-gnu/c++/14/bits/c++config.h \
- /usr/include/aarch64-linux-gnu/c++/14/bits/os_defines.h \
- /usr/include/features.h /usr/include/features-time64.h \
+ /usr/include/termios.h /usr/include/features.h \
+ /usr/include/features-time64.h \
  /usr/include/aarch64-linux-gnu/bits/wordsize.h \
  /usr/include/aarch64-linux-gnu/bits/timesize.h \
  /usr/include/aarch64-linux-gnu/sys/cdefs.h \
  /usr/include/aarch64-linux-gnu/bits/long-double.h \
  /usr/include/aarch64-linux-gnu/gnu/stubs.h \
  /usr/include/aarch64-linux-gnu/gnu/stubs-lp64.h \
+ /usr/include/aarch64-linux-gnu/bits/types.h \
+ /usr/include/aarch64-linux-gnu/bits/typesizes.h \
+ /usr/include/aarch64-linux-gnu/bits/time64.h \
+ /usr/include/aarch64-linux-gnu/bits/termios.h \
+ /usr/include/aarch64-linux-gnu/bits/termios-struct.h \
+ /usr/include/aarch64-linux-gnu/bits/termios-c_cc.h \
+ /usr/include/aarch64-linux-gnu/bits/termios-c_iflag.h \
+ /usr/include/aarch64-linux-gnu/bits/termios-c_oflag.h \
+ /usr/include/aarch64-linux-gnu/bits/termios-baud.h \
+ /usr/include/aarch64-linux-gnu/bits/termios-c_cflag.h \
+ /usr/include/aarch64-linux-gnu/bits/termios-c_lflag.h \
+ /usr/include/aarch64-linux-gnu/bits/termios-tcflow.h \
+ /usr/include/aarch64-linux-gnu/bits/termios-misc.h \
+ /usr/include/aarch64-linux-gnu/sys/ttydefaults.h \
+ /usr/include/c++/14/iostream /usr/include/c++/14/bits/requires_hosted.h \
+ /usr/include/aarch64-linux-gnu/c++/14/bits/c++config.h \
+ /usr/include/aarch64-linux-gnu/c++/14/bits/os_defines.h \
  /usr/include/aarch64-linux-gnu/c++/14/bits/cpu_defines.h \
  /usr/include/c++/14/pstl/pstl_config.h /usr/include/c++/14/ostream \
  /usr/include/c++/14/ios /usr/include/c++/14/iosfwd \
@@ -43,10 +58,7 @@ CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o: \
  /usr/include/aarch64-linux-gnu/c++/14/bits/c++locale.h \
  /usr/include/c++/14/clocale /usr/include/locale.h \
  /usr/include/aarch64-linux-gnu/bits/locale.h /usr/include/c++/14/cctype \
- /usr/include/ctype.h /usr/include/aarch64-linux-gnu/bits/types.h \
- /usr/include/aarch64-linux-gnu/bits/typesizes.h \
- /usr/include/aarch64-linux-gnu/bits/time64.h \
- /usr/include/aarch64-linux-gnu/bits/endian.h \
+ /usr/include/ctype.h /usr/include/aarch64-linux-gnu/bits/endian.h \
  /usr/include/aarch64-linux-gnu/bits/endianness.h \
  /usr/include/c++/14/bits/ios_base.h /usr/include/c++/14/ext/atomicity.h \
  /usr/include/aarch64-linux-gnu/c++/14/bits/gthr.h \
@@ -214,7 +226,21 @@ CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o: \
  /usr/include/c++/14/bits/shared_ptr_base.h \
  /usr/include/c++/14/bits/allocated_ptr.h \
  /usr/include/c++/14/ext/aligned_buffer.h \
- /usr/include/c++/14/ext/concurrence.h \
+ /usr/include/c++/14/ext/concurrence.h /usr/include/c++/14/iomanip \
+ /usr/include/c++/14/locale \
+ /usr/include/c++/14/bits/locale_facets_nonio.h \
+ /usr/include/aarch64-linux-gnu/c++/14/bits/time_members.h \
+ /usr/include/aarch64-linux-gnu/c++/14/bits/messages_members.h \
+ /usr/include/libintl.h /usr/include/c++/14/bits/codecvt.h \
+ /usr/include/c++/14/bits/locale_facets_nonio.tcc \
+ /usr/include/c++/14/bits/locale_conv.h \
+ /usr/include/c++/14/bits/quoted_string.h /usr/include/c++/14/sstream \
+ /usr/include/c++/14/bits/sstream.tcc /usr/include/c++/14/map \
+ /usr/include/c++/14/bits/stl_tree.h \
+ /usr/include/c++/14/bits/node_handle.h \
+ /usr/include/c++/14/bits/stl_map.h \
+ /usr/include/c++/14/bits/stl_multimap.h \
+ /usr/include/c++/14/bits/erase_if.h \
  /usr/include/aarch64-linux-gnu/sys/socket.h \
  /usr/include/aarch64-linux-gnu/bits/types/struct_iovec.h \
  /usr/include/aarch64-linux-gnu/bits/socket.h \
@@ -340,8 +366,7 @@ CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o: \
  /usr/include/opencv4/opencv2/core/persistence.hpp \
  /usr/include/opencv4/opencv2/core/operations.hpp \
  /usr/include/opencv4/opencv2/core/cvstd.inl.hpp \
- /usr/include/c++/14/complex /usr/include/c++/14/sstream \
- /usr/include/c++/14/bits/sstream.tcc \
+ /usr/include/c++/14/complex \
  /usr/include/opencv4/opencv2/core/utility.hpp \
  /usr/include/c++/14/functional /usr/include/c++/14/bits/std_function.h \
  /usr/include/c++/14/unordered_map \
@@ -349,8 +374,6 @@ CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o: \
  /usr/include/c++/14/bits/hashtable.h \
  /usr/include/c++/14/bits/hashtable_policy.h \
  /usr/include/c++/14/bits/enable_special_members.h \
- /usr/include/c++/14/bits/node_handle.h \
- /usr/include/c++/14/bits/erase_if.h \
  /usr/include/opencv4/opencv2/core/optim.hpp \
  /usr/include/opencv4/opencv2/core/ovx.hpp \
  /usr/include/opencv4/opencv2/core/cvdef.h \
@@ -367,9 +390,7 @@ CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o: \
  /usr/include/opencv4/opencv2/dnn/dnn.hpp \
  /usr/include/opencv4/opencv2/core/async.hpp \
  /usr/include/opencv4/opencv2/dnn/version.hpp \
- /usr/include/opencv4/opencv2/dnn/dict.hpp /usr/include/c++/14/map \
- /usr/include/c++/14/bits/stl_tree.h /usr/include/c++/14/bits/stl_map.h \
- /usr/include/c++/14/bits/stl_multimap.h \
+ /usr/include/opencv4/opencv2/dnn/dict.hpp \
  /usr/include/opencv4/opencv2/dnn/layer.hpp \
  /usr/include/opencv4/opencv2/dnn/dnn.inl.hpp \
  /usr/include/opencv4/opencv2/dnn/utils/inference_engine.hpp \
@@ -401,14 +422,6 @@ CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o: \
  /usr/include/opencv4/opencv2/flann/hierarchical_clustering_index.h \
  /usr/include/opencv4/opencv2/flann/lsh_index.h \
  /usr/include/opencv4/opencv2/flann/lsh_table.h \
- /usr/include/c++/14/iomanip /usr/include/c++/14/locale \
- /usr/include/c++/14/bits/locale_facets_nonio.h \
- /usr/include/aarch64-linux-gnu/c++/14/bits/time_members.h \
- /usr/include/aarch64-linux-gnu/c++/14/bits/messages_members.h \
- /usr/include/libintl.h /usr/include/c++/14/bits/codecvt.h \
- /usr/include/c++/14/bits/locale_facets_nonio.tcc \
- /usr/include/c++/14/bits/locale_conv.h \
- /usr/include/c++/14/bits/quoted_string.h \
  /usr/include/opencv4/opencv2/flann/autotuned_index.h \
  /usr/include/opencv4/opencv2/flann/ground_truth.h \
  /usr/include/opencv4/opencv2/flann/index_testing.h \
@@ -452,4 +465,79 @@ CMakeFiles/yolov8_pi4.dir/yolov8_ncnn_pi4.cpp.o: \
  /usr/include/opencv4/opencv2/stitching/detail/camera.hpp \
  /usr/include/opencv4/opencv2/video.hpp \
  /usr/include/opencv4/opencv2/video/tracking.hpp \
- /usr/include/opencv4/opencv2/video/background_segm.hpp
+ /usr/include/opencv4/opencv2/video/background_segm.hpp \
+ /usr/include/aarch64-linux-gnu/curl/curl.h \
+ /usr/include/aarch64-linux-gnu/curl/curlver.h \
+ /usr/include/aarch64-linux-gnu/curl/system.h \
+ /usr/include/aarch64-linux-gnu/curl/easy.h \
+ /usr/include/aarch64-linux-gnu/curl/multi.h \
+ /usr/include/aarch64-linux-gnu/curl/curl.h \
+ /usr/include/aarch64-linux-gnu/curl/urlapi.h \
+ /usr/include/aarch64-linux-gnu/curl/options.h \
+ /usr/include/aarch64-linux-gnu/curl/header.h \
+ /usr/include/aarch64-linux-gnu/curl/websockets.h \
+ /usr/include/aarch64-linux-gnu/curl/mprintf.h \
+ /usr/include/nlohmann/json.hpp /usr/include/c++/14/iterator \
+ /usr/include/c++/14/bits/stream_iterator.h \
+ /usr/include/nlohmann/adl_serializer.hpp \
+ /usr/include/nlohmann/detail/abi_macros.hpp \
+ /usr/include/nlohmann/detail/conversions/from_json.hpp \
+ /usr/include/c++/14/forward_list /usr/include/c++/14/bits/forward_list.h \
+ /usr/include/c++/14/bits/forward_list.tcc /usr/include/c++/14/valarray \
+ /usr/include/c++/14/bits/valarray_array.h \
+ /usr/include/c++/14/bits/valarray_array.tcc \
+ /usr/include/c++/14/bits/valarray_before.h \
+ /usr/include/c++/14/bits/slice_array.h \
+ /usr/include/c++/14/bits/valarray_after.h \
+ /usr/include/c++/14/bits/gslice.h \
+ /usr/include/c++/14/bits/gslice_array.h \
+ /usr/include/c++/14/bits/mask_array.h \
+ /usr/include/c++/14/bits/indirect_array.h \
+ /usr/include/nlohmann/detail/exceptions.hpp \
+ /usr/include/nlohmann/detail/value_t.hpp \
+ /usr/include/nlohmann/detail/macro_scope.hpp \
+ /usr/include/nlohmann/detail/meta/detected.hpp \
+ /usr/include/nlohmann/detail/meta/void_t.hpp \
+ /usr/include/nlohmann/thirdparty/hedley/hedley.hpp \
+ /usr/include/c++/14/version /usr/include/c++/14/cassert \
+ /usr/include/nlohmann/detail/string_escape.hpp \
+ /usr/include/nlohmann/detail/input/position_t.hpp \
+ /usr/include/nlohmann/detail/meta/cpp_future.hpp \
+ /usr/include/nlohmann/detail/meta/type_traits.hpp \
+ /usr/include/nlohmann/detail/iterators/iterator_traits.hpp \
+ /usr/include/nlohmann/detail/meta/call_std/begin.hpp \
+ /usr/include/nlohmann/detail/meta/call_std/end.hpp \
+ /usr/include/nlohmann/json_fwd.hpp \
+ /usr/include/nlohmann/detail/string_concat.hpp \
+ /usr/include/nlohmann/detail/meta/identity_tag.hpp \
+ /usr/include/nlohmann/detail/meta/std_fs.hpp \
+ /usr/include/c++/14/filesystem /usr/include/c++/14/bits/fs_fwd.h \
+ /usr/include/c++/14/bits/fs_path.h /usr/include/c++/14/codecvt \
+ /usr/include/c++/14/bits/fs_dir.h /usr/include/c++/14/bits/fs_ops.h \
+ /usr/include/nlohmann/detail/conversions/to_json.hpp \
+ /usr/include/nlohmann/detail/iterators/iteration_proxy.hpp \
+ /usr/include/nlohmann/byte_container_with_subtype.hpp \
+ /usr/include/nlohmann/detail/hash.hpp \
+ /usr/include/nlohmann/detail/input/binary_reader.hpp \
+ /usr/include/nlohmann/detail/input/input_adapters.hpp \
+ /usr/include/c++/14/numeric /usr/include/c++/14/bits/stl_numeric.h \
+ /usr/include/c++/14/pstl/glue_numeric_defs.h \
+ /usr/include/nlohmann/detail/input/json_sax.hpp \
+ /usr/include/nlohmann/detail/input/lexer.hpp \
+ /usr/include/nlohmann/detail/meta/is_sax.hpp \
+ /usr/include/nlohmann/detail/input/parser.hpp \
+ /usr/include/nlohmann/detail/iterators/internal_iterator.hpp \
+ /usr/include/nlohmann/detail/iterators/primitive_iterator.hpp \
+ /usr/include/nlohmann/detail/iterators/iter_impl.hpp \
+ /usr/include/nlohmann/detail/iterators/json_reverse_iterator.hpp \
+ /usr/include/nlohmann/detail/json_custom_base_class.hpp \
+ /usr/include/nlohmann/detail/json_pointer.hpp \
+ /usr/include/nlohmann/detail/json_ref.hpp \
+ /usr/include/nlohmann/detail/output/binary_writer.hpp \
+ /usr/include/nlohmann/detail/output/output_adapters.hpp \
+ /usr/include/nlohmann/detail/output/serializer.hpp \
+ /usr/include/nlohmann/detail/conversions/to_chars.hpp \
+ /usr/include/nlohmann/ordered_map.hpp /usr/include/c++/14/any \
+ /usr/include/nlohmann/detail/macro_unscope.hpp \
+ /usr/include/nlohmann/thirdparty/hedley/hedley_undef.hpp \
+ /home/pi4/project/Pi4RobotDriver.h
